@@ -12,7 +12,18 @@ from sensorfabric.mdh import MDH
 
 # Configure logging
 logger = logging.getLogger()
-logger.setLevel(logging.INFO)
+DEFAULT_LOG_LEVEL = logging.ERROR
+
+if logging.getLogger().hasHandlers():
+    # The Lambda environment pre-configures a handler logging to stderr. If a handler is already configured,
+    # `.basicConfig` does not execute. Thus we set the level directly.
+    logging.getLogger().setLevel(DEFAULT_LOG_LEVEL)
+else:
+    logging.basicConfig(level=DEFAULT_LOG_LEVEL)
+
+
+logger.info("In ultrahuman/uh_publisher.py")
+
 
 DEFAULT_PROJECT_NAME = 'uh-biobayb-dev'
 
@@ -27,13 +38,14 @@ class UltrahumanSNSPublisher:
     3. Dead letter queue handling for failed message publishing
     """
     
-    def __init__(self):
+    def __init__(self, config: Dict[str, Any]):
+        self.__config = config
         self.mdh = None
         self.sns_client = None
         
         # SNS configuration from environment variables
-        self.sns_topic_arn = os.environ.get('UH_SNS_TOPIC_ARN')
-        self.dead_letter_queue_url = os.environ.get('UH_DLQ_URL')
+        self.sns_topic_arn = os.getenv('UH_SNS_TOPIC_ARN')
+        self.dead_letter_queue_url = os.getenv('UH_DLQ_URL')
         
         # Validate required environment variables
         if not self.sns_topic_arn:
@@ -51,11 +63,10 @@ class UltrahumanSNSPublisher:
         try:
             # Initialize MDH connection from env vars
             mdh_configuration = {
-                'account_secret': os.environ.get('MDH_SECRET_KEY'),
-                'account_name': os.environ.get('MDH_ACCOUNT_NAME'),
-                'project_id': os.environ.get('MDH_PROJECT_ID'),
+                'account_secret': self.__config.get('MDH_SECRET_KEY'),
+                'account_name': self.__config.get('MDH_ACCOUNT_NAME'),
+                'project_id': self.__config.get('MDH_PROJECT_ID'),
             }
-            
             self.mdh = MDH(**mdh_configuration)
             logger.info("MDH connection initialized successfully")
             
@@ -377,12 +388,9 @@ def lambda_handler(event, context):
 
     # setup environment with secrets
     secrets = get_secret()
-    # hoist to env
-    for key, value in secrets.items():
-        os.environ[key] = value
 
     try:
-        publisher = UltrahumanSNSPublisher()
+        publisher = UltrahumanSNSPublisher(config=secrets)
         
         # Extract target date from event if provided
         target_date = event.get('target_date', None)

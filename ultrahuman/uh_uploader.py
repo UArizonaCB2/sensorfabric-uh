@@ -15,7 +15,7 @@ import jsonschema
 
 # Configure logging
 logger = logging.getLogger()
-DEFAULT_LOG_LEVEL = logging.ERROR
+DEFAULT_LOG_LEVEL = logging.INFO
 
 if logging.getLogger().hasHandlers():
     # The Lambda environment pre-configures a handler logging to stderr. If a handler is already configured,
@@ -23,6 +23,9 @@ if logging.getLogger().hasHandlers():
     logging.getLogger().setLevel(DEFAULT_LOG_LEVEL)
 else:
     logging.basicConfig(level=DEFAULT_LOG_LEVEL)
+
+
+logger.info("In ultrahuman/uh_uploader.py")
 
 
 DEFAULT_DATABASE_NAME = 'uh-biobayb-dev'
