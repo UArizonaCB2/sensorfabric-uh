@@ -1,0 +1,39 @@
+# Use the official AWS Lambda Python 3.13 runtime as base image
+FROM public.ecr.aws/lambda/python:3.13
+
+# Set labels for better container management
+LABEL maintainer="University of Arizona CB2"
+LABEL description="UltraHuman Lambda container for Sensorfabric/UltraHuman data processing"
+LABEL version="3.2.2"
+
+# Install system dependencies if needed
+RUN dnf update -y && \
+    dnf install -y gcc python3-devel && \
+    dnf clean all && \
+    rm -rf /var/cache/dnf
+
+# Copy requirements file first for better Docker layer caching
+COPY requirements.txt ${LAMBDA_TASK_ROOT}/
+
+# Install Python dependencies with optimizations
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt && \
+    pip cache purge
+
+# Copy the entire ultrahuman package
+COPY ultrahuman/ ${LAMBDA_TASK_ROOT}/ultrahuman/
+
+# Set up proper permissions
+RUN chmod -R 755 ${LAMBDA_TASK_ROOT}/ultrahuman/
+
+# Create directory for cache and temp files
+RUN mkdir -p ${LAMBDA_TASK_ROOT}/.cache && \
+    chmod 777 ${LAMBDA_TASK_ROOT}/.cache
+
+# Set environment variables for Lambda optimization
+ENV PYTHONPATH=${LAMBDA_TASK_ROOT}
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+
+# The CMD will be overridden when building specific lambda functions
+CMD ["ultrahuman.uh_uploader.lambda_handler"]
