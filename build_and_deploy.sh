@@ -13,7 +13,8 @@ ECR_REGISTRY="509812589231.dkr.ecr.us-east-1.amazonaws.com"
 ECR_REPOSITORY="uh-biobayb"
 AWS_REGION="us-east-1"
 
-# Lambda function mapping: local_name -> aws_function_name
+# Lambda function mapping: local_name -> docker_tag_name
+# Note: Actual deployed function names follow CDK pattern: {project_name}_biobayb_uh_{type}_Lambda
 declare -A LAMBDA_FUNCTIONS=(
     ["uh_uploader"]="biobayb_uh_uploader"
     ["uh_publisher"]="biobayb_uh_sns_publisher"
@@ -172,30 +173,50 @@ push_to_ecr() {
     fi
 }
 
+# Discover actual deployed Lambda function name
+discover_deployed_function_name() {
+    local local_func=$1
+    local docker_tag=${LAMBDA_FUNCTIONS[$local_func]}
+    
+    # Query AWS Lambda to find the actual deployed function name
+    local actual_function_name=$(aws lambda list-functions \
+        --region "$AWS_REGION" \
+        --query "Functions[?contains(FunctionName, '_${docker_tag}_Lambda')].FunctionName" \
+        --output text 2>/dev/null)
+    
+    if [ -n "$actual_function_name" ]; then
+        echo "$actual_function_name"
+    else
+        # Fallback to legacy naming
+        echo "$docker_tag"
+    fi
+}
+
 # Update Lambda function to use new container image
 update_lambda_function() {
     local local_func=$1
-    local aws_func=${LAMBDA_FUNCTIONS[$local_func]}
-    local image_uri="$ECR_REGISTRY/$ECR_REPOSITORY:$aws_func"
+    local docker_tag=${LAMBDA_FUNCTIONS[$local_func]}
+    local actual_function_name=$(discover_deployed_function_name "$local_func")
+    local image_uri="$ECR_REGISTRY/$ECR_REPOSITORY:$docker_tag"
     
-    print_header "Updating Lambda function: $aws_func"
+    print_header "Updating Lambda function: $actual_function_name"
     
     # Update function code to use new container image
     aws lambda update-function-code \
-        --function-name "$aws_func" \
+        --function-name "$actual_function_name" \
         --image-uri "$image_uri" \
         --region "$AWS_REGION" \
         --output table
     
     if [ $? -eq 0 ]; then
-        print_status "Successfully updated Lambda function $aws_func"
+        print_status "Successfully updated Lambda function $actual_function_name"
         
         # Wait for function to be updated
         print_status "Waiting for function update to complete..."
-        aws lambda wait function-updated --function-name "$aws_func" --region "$AWS_REGION"
-        print_status "Function update completed for $aws_func"
+        aws lambda wait function-updated --function-name "$actual_function_name" --region "$AWS_REGION"
+        print_status "Function update completed for $actual_function_name"
     else
-        print_error "Failed to update Lambda function $aws_func"
+        print_error "Failed to update Lambda function $actual_function_name"
         exit 1
     fi
 }
@@ -283,8 +304,13 @@ main() {
     print_header "Build and deploy process completed successfully!"
     print_status "Updated Lambda functions:"
     for local_func in "${!LAMBDA_FUNCTIONS[@]}"; do
-        local aws_func=${LAMBDA_FUNCTIONS[$local_func]}
-        echo "  - $local_func -> $aws_func"
+        local docker_tag=${LAMBDA_FUNCTIONS[$local_func]}
+        if [ "$build_only" = false ] && [ "$use_cdk" = false ]; then
+            local actual_function_name=$(discover_deployed_function_name "$local_func")
+            echo "  - $local_func -> $actual_function_name (image: $docker_tag)"
+        else
+            echo "  - $local_func -> $docker_tag (image built)"
+        fi
     done
 }
 

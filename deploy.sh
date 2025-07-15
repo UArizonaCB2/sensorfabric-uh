@@ -76,32 +76,32 @@ discover_lambda_functions() {
         function_count=$((function_count + 1))
         log_debug "Processing function #$function_count: '$func'"
         
-        if [[ "$func" =~ "biobayb_uh_uploader" ]]; then
-            # Extract stack name from function name
-            local stack_name="${func%-biobayb_uh_uploader}"
-            log_debug "Extracted stack name for uploader: '$stack_name'"
+        if [[ "$func" == *"_biobayb_uh_uploader_Lambda" ]]; then
+            # Extract project name from function name (format: {project_name}_biobayb_uh_uploader_Lambda)
+            local project_name="${func%_biobayb_uh_uploader_Lambda}"
+            log_debug "Extracted project name for uploader: '$project_name'"
             
-            # Apply stack filter if specified
-            if [ -n "$STACK_FILTER" ] && [ "$stack_name" != "$STACK_FILTER" ]; then
+            # Apply stack filter if specified (match against project name)
+            if [ -n "$STACK_FILTER" ] && [ "$project_name" != "$STACK_FILTER" ]; then
                 log_debug "Skipping $func (not in filtered stack: $STACK_FILTER)"
                 continue
             fi
             
-            local key="${stack_name}-uh_uploader"
+            local key="${project_name}-uh_uploader"
             LAMBDA_FUNCTIONS["$key"]="$func"
             log_info "Mapped $key -> $func"
-        elif [[ "$func" =~ "biobayb_uh_sns_publisher" ]]; then
-            # Extract stack name from function name
-            local stack_name="${func%-biobayb_uh_sns_publisher}"
-            log_debug "Extracted stack name for publisher: '$stack_name'"
+        elif [[ "$func" == *"_biobayb_uh_sns_publisher_Lambda" ]]; then
+            # Extract project name from function name (format: {project_name}_biobayb_uh_sns_publisher_Lambda)
+            local project_name="${func%_biobayb_uh_sns_publisher_Lambda}"
+            log_debug "Extracted project name for publisher: '$project_name'"
             
-            # Apply stack filter if specified
-            if [ -n "$STACK_FILTER" ] && [ "$stack_name" != "$STACK_FILTER" ]; then
+            # Apply stack filter if specified (match against project name)
+            if [ -n "$STACK_FILTER" ] && [ "$project_name" != "$STACK_FILTER" ]; then
                 log_debug "Skipping $func (not in filtered stack: $STACK_FILTER)"
                 continue
             fi
             
-            local key="${stack_name}-uh_publisher"
+            local key="${project_name}-uh_publisher"
             LAMBDA_FUNCTIONS["$key"]="$func"
             log_info "Mapped $key -> $func"
         else
