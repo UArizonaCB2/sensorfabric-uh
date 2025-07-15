@@ -1,4 +1,5 @@
 from typing import Dict, Any
+from dataclasses import dataclass
 import aws_cdk as cdk
 from aws_cdk import (
     aws_lambda as lambda_,
@@ -17,6 +18,21 @@ from aws_cdk import (
 from constructs import Construct
 
 
+@dataclass
+class StackConfig:
+    """Configuration for SensorFabric Lambda Stack deployment."""
+    stack_name: str           # e.g., "UltraHuman-AZ-1"
+    environment: str          # dev, staging, prod
+    ecr_registry: str
+    ecr_repository: str
+    project_name: str
+    database_name: str
+    sns_topic_name: str
+    aws_secret_name: str
+    sf_data_bucket: str
+    uh_environment: str
+
+
 class SensorFabricLambdaStack(Stack):
     """
     CDK Stack for SensorFabric Lambda functions using Docker containers.
@@ -29,20 +45,40 @@ class SensorFabricLambdaStack(Stack):
     - EventBridge rules for scheduling
     """
 
-    def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
+    def __init__(self, scope: Construct, construct_id: str, config: StackConfig, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
-        # Configuration
-        self.ecr_registry = "509812589231.dkr.ecr.us-east-1.amazonaws.com"
-        self.ecr_repository = "uh-biobayb"
-        self.project_name = "uh-biobayb-dev"
-        self.database_name = "uh-biobayb-dev"
-        self.sns_topic_name = "mdh_uh_sync"
-        self.aws_secret_name = "prod/biobayb/uh/keys"
-        self.sf_data_bucket = "uoa-biobayb-uh-dev"
-        self.uh_environment = "production"
+        # Store configuration
+        self.config = config
         self.lambda_functions = {}
-        # Environment variables are now properly configured:
+        self.lambda_aliases = {}
+
+        # Validate configuration
+        self._validate_config(config)
+
+    def _validate_config(self, config: StackConfig) -> None:
+        """Validate the stack configuration."""
+        required_fields = [
+            'stack_name', 'environment', 'ecr_registry', 'ecr_repository',
+            'project_name', 'database_name', 'sns_topic_name', 'aws_secret_name',
+            'sf_data_bucket', 'uh_environment'
+        ]
+        
+        for field in required_fields:
+            value = getattr(config, field)
+            if not value or not isinstance(value, str) or not value.strip():
+                raise ValueError(f"Configuration field '{field}' is required and must be a non-empty string")
+        
+        # Validate stack_name format (AWS resource naming conventions)
+        if not config.stack_name.replace('-', '').replace('_', '').isalnum():
+            raise ValueError(f"Stack name '{config.stack_name}' must contain only alphanumeric characters, hyphens, and underscores")
+        
+        # Validate environment
+        valid_environments = ['dev', 'staging', 'prod', 'production']
+        if config.environment not in valid_environments:
+            raise ValueError(f"Environment '{config.environment}' must be one of: {valid_environments}")
+
+        # Environment variables:
         # biobayb_uh_sns_publisher: AWS_SECRET_NAME, UH_DLQ_URL, UH_SNS_TOPIC_ARN
         # biobayb_uh_uploader: SF_DATA_BUCKET, UH_ENVIRONMENT, AWS_SECRET_NAME
         # Both functions have access to AWS Secrets Manager secret 'prod/biobayb/uh/keys'
@@ -54,18 +90,18 @@ class SensorFabricLambdaStack(Stack):
                 "timeout": Duration.minutes(15),
                 "memory_size": 3008,
                 "environment": {
-                    "UH_ENVIRONMENT": self.uh_environment,
-                    "SF_DATA_BUCKET": self.sf_data_bucket,
-                    "AWS_SECRET_NAME": self.aws_secret_name
+                    "UH_ENVIRONMENT": self.config.uh_environment,
+                    "SF_DATA_BUCKET": self.config.sf_data_bucket,
+                    "AWS_SECRET_NAME": self.config.aws_secret_name
                 }
             },
             "biobayb_uh_sns_publisher": {
                 "description": "UltraHuman SNS publisher Lambda function",
-                "timeout": Duration.minutes(10),
-                "memory_size": 1024,
+                "timeout": Duration.minutes(5),
+                "memory_size": 2048,
                 "environment": {
-                    "AWS_SECRET_NAME": self.aws_secret_name,
-                    "UH_ENVIRONMENT": self.uh_environment
+                    "AWS_SECRET_NAME": self.config.aws_secret_name,
+                    "UH_ENVIRONMENT": self.config.uh_environment
                 }
             }
         }
@@ -73,7 +109,7 @@ class SensorFabricLambdaStack(Stack):
         # Create ECR repository reference
         self.ecr_repo = ecr.Repository.from_repository_name(
             self, "SensorFabricECRRepo", 
-            repository_name=self.ecr_repository
+            repository_name=self.config.ecr_repository
         )
 
         # Create IAM roles
@@ -87,6 +123,9 @@ class SensorFabricLambdaStack(Stack):
         
         # Create Lambda functions (after SNS/SQS to reference ARNs)
         self.create_lambda_functions()
+        
+        # Create Lambda aliases with provisioned concurrency
+        self.create_lambda_aliases()
 
         self.subscribe_sns_to_lambda()
 
@@ -98,7 +137,7 @@ class SensorFabricLambdaStack(Stack):
         
         # Base Lambda execution role
         self.lambda_execution_role = iam.Role(
-            self, f"{self.project_name}_LambdaExecutionRole",
+            self, f"{self.config.project_name}_LambdaExecutionRole",
             assumed_by=iam.ServicePrincipal("lambda.amazonaws.com"),
             managed_policies=[
                 iam.ManagedPolicy.from_aws_managed_policy_name("service-role/AWSLambdaBasicExecutionRole"),
@@ -165,7 +204,7 @@ class SensorFabricLambdaStack(Stack):
                 "secretsmanager:DescribeSecret"
             ],
             resources=[
-                f"arn:aws:secretsmanager:{self.region}:{self.account}:secret:{self.aws_secret_name}*"
+                f"arn:aws:secretsmanager:{self.region}:{self.account}:secret:{self.config.aws_secret_name}*"
             ]
         )
 
@@ -178,7 +217,7 @@ class SensorFabricLambdaStack(Stack):
         for function_name, config in self.lambda_config.items():
             # Create CloudWatch Log Group
             log_group = logs.LogGroup(
-                self, f"{self.project_name}_{function_name}_LogGroup",
+                self, f"{self.config.project_name}_{function_name}_LogGroup",
                 log_group_name=f"/aws/lambda/{function_name}",
                 retention=logs.RetentionDays.ONE_MONTH,
                 removal_policy=RemovalPolicy.DESTROY
@@ -186,12 +225,12 @@ class SensorFabricLambdaStack(Stack):
 
             # Create Lambda function
             lambda_function = lambda_.DockerImageFunction(
-                self, f"{self.project_name}_{function_name}_Lambda",
-                function_name=function_name,
+                self, f"{self.config.project_name}_{function_name}_Lambda",
+                function_name=f"{self.config.project_name}_{function_name}_Lambda",
                 description=config["description"],
                 code=lambda_.DockerImageCode.from_ecr(
                     repository=self.ecr_repo,
-                    tag=function_name
+                    tag_or_digest=function_name
                 ),
                 role=self.lambda_execution_role,
                 timeout=config["timeout"],
@@ -213,13 +252,35 @@ class SensorFabricLambdaStack(Stack):
 
             # Output the Lambda function ARN
             cdk.CfnOutput(
-                self, f"{self.project_name}_{function_name}_Lambda_ARN",
+                self, f"{self.config.project_name}_{function_name}_Lambda_ARN",
                 value=lambda_function.function_arn,
-                description=f"ARN for {self.project_name}_{function_name} Lambda function"
+                description=f"ARN for {self.config.project_name}_{function_name} Lambda function"
             )
         
         # Add dynamic environment variables after all resources are created
         self.update_lambda_environment_variables()
+
+    def create_lambda_aliases(self) -> None:
+        """Create Lambda aliases with provisioned concurrency."""
+        
+        for function_name, lambda_function in self.lambda_functions.items():
+            # Create alias pointing to $LATEST
+            alias = lambda_.Alias(
+                self, f"{self.config.project_name}_{function_name}_Alias",
+                alias_name="LIVE",
+                version=lambda_function.current_version,
+                provisioned_concurrent_executions=1,
+                description=f"LIVE alias for {function_name} with provisioned concurrency"
+            )
+            
+            self.lambda_aliases[function_name] = alias
+            
+            # Output the alias ARN
+            cdk.CfnOutput(
+                self, f"{self.config.project_name}_{function_name}_Alias_ARN",
+                value=alias.function_arn,
+                description=f"ARN for {self.config.project_name}_{function_name} LIVE alias"
+            )
 
     def create_sns_resources(self) -> None:
         """Create SNS topics for inter-function communication."""
@@ -227,7 +288,7 @@ class SensorFabricLambdaStack(Stack):
         # Topic for UltraHuman data collection requests
         self.uh_data_collection_topic = sns.Topic(
             self, "UHDataCollectionTopic",
-            topic_name=self.sns_topic_name,
+            topic_name=f"{self.config.stack_name}-{self.config.sns_topic_name}",
             display_name="UltraHuman Data Collection Topic",
         )
 
@@ -240,19 +301,19 @@ class SensorFabricLambdaStack(Stack):
 
     def subscribe_sns_to_lambda(self) -> None:
         """
-        Subscribe the uploader Lambda to the topic and grant publish permissions to the publisher Lambda.
-        To be run after lambdas are created.
+        Subscribe the uploader Lambda alias to the topic and grant publish permissions to the publisher Lambda alias.
+        To be run after lambdas and aliases are created.
         """
-        # Subscribe the uploader Lambda to the topic
-        if "biobayb_uh_uploader" in self.lambda_functions:
+        # Subscribe the uploader Lambda alias to the topic
+        if "biobayb_uh_uploader" in self.lambda_aliases:
             self.uh_data_collection_topic.add_subscription(
-                subscriptions.LambdaSubscription(self.lambda_functions["biobayb_uh_uploader"])
+                subscriptions.LambdaSubscription(self.lambda_aliases["biobayb_uh_uploader"])
             )
 
-        # Grant publish permissions to the publisher Lambda
-        if "biobayb_uh_sns_publisher" in self.lambda_functions:
+        # Grant publish permissions to the publisher Lambda alias
+        if "biobayb_uh_sns_publisher" in self.lambda_aliases:
             self.uh_data_collection_topic.grant_publish(
-                self.lambda_functions["biobayb_uh_sns_publisher"]
+                self.lambda_aliases["biobayb_uh_sns_publisher"]
             )
 
     def create_sqs_resources(self) -> None:
@@ -261,7 +322,7 @@ class SensorFabricLambdaStack(Stack):
         # Dead letter queue for SNS publisher
         self.uh_dlq = sqs.Queue(
             self, "UHPublisherDLQ",
-            queue_name="biobayb_uh_undeliverable",
+            queue_name=f"{self.config.stack_name}-biobayb_uh_undeliverable",
             visibility_timeout=Duration.seconds(300),
             retention_period=Duration.days(14),
             removal_policy=RemovalPolicy.DESTROY
@@ -275,12 +336,12 @@ class SensorFabricLambdaStack(Stack):
         )
 
     def create_eventbridge_rules(self) -> None:
-        """Create EventBridge rules for scheduled Lambda executions."""
+        """Create EventBridge rules for scheduled Lambda executions using aliases."""
         
         # Schedule for SNS publisher (runs daily at midnight AZ time UTC-7)
-        if "biobayb_uh_sns_publisher" in self.lambda_functions:
+        if "biobayb_uh_sns_publisher" in self.lambda_aliases:
             publisher_rule = events.Rule(
-                self, f"{self.project_name}_UHPublisherScheduleRule",
+                self, f"{self.config.project_name}_UHPublisherScheduleRule",
                 description="Schedule for UltraHuman SNS publisher",
                 schedule=events.Schedule.cron(
                     minute="0",
@@ -292,14 +353,14 @@ class SensorFabricLambdaStack(Stack):
             )
             
             publisher_rule.add_target(
-                targets.LambdaFunction(self.lambda_functions["biobayb_uh_sns_publisher"])
+                targets.LambdaFunction(self.lambda_aliases["biobayb_uh_sns_publisher"])
             )
 
         # Manual trigger capability for uploader
-        if "biobayb_uh_uploader" in self.lambda_functions:
+        if "biobayb_uh_uploader" in self.lambda_aliases:
             # This creates a custom event pattern that can be triggered manually
             uploader_rule = events.Rule(
-                self, f"{self.project_name}_UHUploaderManualTriggerRule",
+                self, f"{self.config.project_name}_UHUploaderManualTriggerRule",
                 description="Manual trigger for UltraHuman data uploader",
                 event_pattern=events.EventPattern(
                     source=["sensorfabric.manual"],
@@ -308,7 +369,7 @@ class SensorFabricLambdaStack(Stack):
             )
             
             uploader_rule.add_target(
-                targets.LambdaFunction(self.lambda_functions["biobayb_uh_uploader"])
+                targets.LambdaFunction(self.lambda_aliases["biobayb_uh_uploader"])
             )
 
     def update_lambda_environment_variables(self) -> None:

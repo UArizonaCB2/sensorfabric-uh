@@ -13,11 +13,11 @@ ECR_REPOSITORY="uh-biobayb"
 AWS_REGION="us-east-1"
 CDK_DIR="$SCRIPT_DIR/cdk"
 
-# Lambda function mappings
-declare -A LAMBDA_FUNCTIONS=(
-    ["uh_uploader"]="biobayb_uh_uploader"
-    ["uh_publisher"]="biobayb_uh_sns_publisher"
-)
+# Lambda function mappings - will be populated dynamically
+declare -A LAMBDA_FUNCTIONS
+
+# Stack filter for operations (empty means all stacks)
+STACK_FILTER=""
 
 # Colors for output
 RED='\033[0;31m'
@@ -26,6 +26,108 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 PURPLE='\033[0;35m'
 NC='\033[0m' # No Color
+
+# Discover deployed Lambda functions
+discover_lambda_functions() {
+    log_header "Discovering deployed Lambda functions..."
+    
+    # Clear existing mappings
+    unset LAMBDA_FUNCTIONS
+    declare -gA LAMBDA_FUNCTIONS
+    
+    # Get all Lambda functions that match our naming pattern
+    log_debug "Querying AWS Lambda for functions matching our pattern..."
+    local functions_json=$(aws lambda list-functions \
+        --region "$AWS_REGION" \
+        --query 'Functions[?contains(FunctionName, `_biobayb_uh_uploader_Lambda`) || contains(FunctionName, `_biobayb_uh_sns_publisher_Lambda`)].FunctionName' \
+        --output json 2>/dev/null || echo "[]")
+    
+    log_debug "Raw AWS response: $functions_json"
+    
+    # Convert JSON array to space-separated list
+    local functions=""
+    if command -v jq &> /dev/null; then
+        functions=$(echo "$functions_json" | jq -r '.[]' 2>/dev/null | tr '\n' ' ')
+    else
+        # Fallback without jq - extract function names from JSON manually
+        functions=$(echo "$functions_json" | grep -o '"[^"]*biobayb_uh_[^"]*"' | sed 's/"//g' | tr '\n' ' ')
+    fi
+    
+    log_debug "Processed functions list: '$functions'"
+    
+    if [ -z "$functions" ] || [ "$functions" = " " ]; then
+        log_warning "No Lambda functions found matching our pattern"
+        # Fallback to legacy naming for backward compatibility
+        LAMBDA_FUNCTIONS["uh_uploader"]="biobayb_uh_uploader"
+        LAMBDA_FUNCTIONS["uh_publisher"]="biobayb_uh_sns_publisher"
+        log_info "Using legacy function names as fallback"
+        return
+    fi
+    
+    # Process discovered functions
+    log_debug "Starting to process functions..."
+    local function_count=0
+    for func in $functions; do
+        # Skip empty strings
+        if [ -z "$func" ]; then
+            continue
+        fi
+        
+        function_count=$((function_count + 1))
+        log_debug "Processing function #$function_count: '$func'"
+        
+        if [[ "$func" =~ "biobayb_uh_uploader" ]]; then
+            # Extract stack name from function name
+            local stack_name="${func%-biobayb_uh_uploader}"
+            log_debug "Extracted stack name for uploader: '$stack_name'"
+            
+            # Apply stack filter if specified
+            if [ -n "$STACK_FILTER" ] && [ "$stack_name" != "$STACK_FILTER" ]; then
+                log_debug "Skipping $func (not in filtered stack: $STACK_FILTER)"
+                continue
+            fi
+            
+            local key="${stack_name}-uh_uploader"
+            LAMBDA_FUNCTIONS["$key"]="$func"
+            log_info "Mapped $key -> $func"
+        elif [[ "$func" =~ "biobayb_uh_sns_publisher" ]]; then
+            # Extract stack name from function name
+            local stack_name="${func%-biobayb_uh_sns_publisher}"
+            log_debug "Extracted stack name for publisher: '$stack_name'"
+            
+            # Apply stack filter if specified
+            if [ -n "$STACK_FILTER" ] && [ "$stack_name" != "$STACK_FILTER" ]; then
+                log_debug "Skipping $func (not in filtered stack: $STACK_FILTER)"
+                continue
+            fi
+            
+            local key="${stack_name}-uh_publisher"
+            LAMBDA_FUNCTIONS["$key"]="$func"
+            log_info "Mapped $key -> $func"
+        else
+            log_debug "Function '$func' doesn't match expected patterns"
+        fi
+    done
+    
+    log_debug "Processed $function_count functions total"
+    
+    if [ ${#LAMBDA_FUNCTIONS[@]} -eq 0 ]; then
+        if [ -n "$STACK_FILTER" ]; then
+            log_error "No Lambda functions found for stack: $STACK_FILTER"
+        else
+            log_error "No valid Lambda functions discovered"
+        fi
+        exit 1
+    fi
+    
+    local stack_info=""
+    if [ -n "$STACK_FILTER" ]; then
+        stack_info=" for stack: $STACK_FILTER"
+    else
+        stack_info=" across deployed stacks"
+    fi
+    log_info "Discovered ${#LAMBDA_FUNCTIONS[@]} Lambda functions${stack_info}"
+}
 
 # Logging functions
 log_info() {
@@ -103,13 +205,21 @@ validate_prerequisites() {
     fi
     
     log_info "All prerequisites validated successfully"
+    
+    # Discover deployed Lambda functions
+    discover_lambda_functions
 }
 
 # Backup current Lambda functions
 backup_lambda_functions() {
     log_header "Creating backup of current Lambda functions..."
     
-    local backup_dir="$SCRIPT_DIR/backup/$(date +%Y%m%d_%H%M%S)"
+    local timestamp=$(date +%Y%m%d_%H%M%S)
+    local stack_suffix=""
+    if [ -n "$STACK_FILTER" ]; then
+        stack_suffix="_${STACK_FILTER}"
+    fi
+    local backup_dir="$SCRIPT_DIR/backup/${timestamp}${stack_suffix}"
     mkdir -p "$backup_dir"
     
     for local_func in "${!LAMBDA_FUNCTIONS[@]}"; do
@@ -368,6 +478,10 @@ main() {
                 action="test"
                 shift
                 ;;
+            --stack)
+                STACK_FILTER="$2"
+                shift 2
+                ;;
             --debug)
                 DEBUG=true
                 shift
@@ -384,6 +498,7 @@ Options:
   --rollback            Rollback to previous deployment
   --health-check        Perform health check only
   --test                Run tests only
+  --stack STACK_NAME    Target specific stack (e.g., UltraHuman-AZ-1)
   --debug               Enable debug logging
   --help, -h            Show this help message
 
@@ -394,6 +509,7 @@ Examples:
   $0 --rollback         # Rollback to previous version
   $0 --health-check     # Check current deployment health
   $0 --test             # Run tests on current deployment
+  $0 --stack UltraHuman-AZ-1 --health-check  # Check specific stack health
 
 Environment variables:
   DEBUG                 Enable debug logging (true/false)

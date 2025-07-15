@@ -21,6 +21,10 @@ if logging.getLogger().hasHandlers():
 else:
     logging.basicConfig(level=DEFAULT_LOG_LEVEL)
 
+# suppress boto3 verbose logging
+logging.getLogger("boto3").setLevel(logging.WARNING)
+logging.getLogger("botocore").setLevel(logging.WARNING)
+
 
 logger.info("In ultrahuman/uh_publisher.py")
 

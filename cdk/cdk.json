@@ -14,6 +14,10 @@
     ]
   },
   "context": {
+    "// Example configurations for different deployments": "Use -c flag to override these values",
+    "// Arizona Production": "cdk deploy -c stack_name=UltraHuman-AZ-1 -c environment=prod",
+    "// California Production": "cdk deploy -c stack_name=UltraHuman-CA-1 -c environment=prod", 
+    "// Development": "cdk deploy -c stack_name=UltraHuman-Dev -c environment=dev",
     "@aws-cdk/aws-lambda:recognizeLayerVersion": true,
     "@aws-cdk/core:checkSecretUsage": true,
     "@aws-cdk/core:target-partitions": [
