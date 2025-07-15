@@ -12,7 +12,7 @@ from sensorfabric.mdh import MDH
 
 # Configure logging
 logger = logging.getLogger()
-DEFAULT_LOG_LEVEL = logging.ERROR
+DEFAULT_LOG_LEVEL = logging.INFO
 
 if logging.getLogger().hasHandlers():
     # The Lambda environment pre-configures a handler logging to stderr. If a handler is already configured,
