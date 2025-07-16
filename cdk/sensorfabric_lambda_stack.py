@@ -11,6 +11,7 @@ from aws_cdk import (
     aws_sqs as sqs,
     aws_events as events,
     aws_events_targets as targets,
+    Tags,
     Duration,
     Stack,
     RemovalPolicy
@@ -55,6 +56,10 @@ class SensorFabricLambdaStack(Stack):
 
         # Validate configuration
         self._validate_config(config)
+        
+        # add tags
+        Tags.of(self).add("project", self.config.project_name)
+
 
     def _validate_config(self, config: StackConfig) -> None:
         """Validate the stack configuration."""
