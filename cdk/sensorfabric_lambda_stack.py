@@ -223,9 +223,9 @@ class SensorFabricLambdaStack(Stack):
             # Create CloudWatch Log Group
             log_group = logs.LogGroup(
                 self, f"{self.config.project_name}_{function_name}_LogGroup",
-                log_group_name=f"/aws/lambda/{function_name}",
-                retention=logs.RetentionDays.ONE_MONTH,
-                removal_policy=RemovalPolicy.DESTROY
+                log_group_name=f"/aws/lambda/{self.config.project_name}_{function_name}",
+                retention=logs.RetentionDays.INFINITE,
+                removal_policy=RemovalPolicy.RETAIN
             )
 
             # Create Lambda function
