@@ -428,7 +428,7 @@ deploy_pipeline() {
     
     # Wait for deployment to stabilize
     log_info "Waiting for deployment to stabilize..."
-    sleep 30
+    sleep 15
     
     # Run tests if not skipped
     # TODO fix tests.
