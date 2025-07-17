@@ -34,6 +34,7 @@ logger.info("In ultrahuman/uh_uploader.py")
 DEFAULT_DATABASE_NAME = 'uh-biobayb-dev'
 DEFAULT_DATA_BUCKET = 'uoa-biobayb-uh-dev'
 DEFAULT_PROJECT_NAME = 'uh-biobayb-dev'
+DEFAULT_TIMEZONE = 'America/Phoenix'
 
 
 class UltrahumanDataUploader:
@@ -50,6 +51,7 @@ class UltrahumanDataUploader:
     def __init__(self, config: Dict[str, Any], **kwargs):
         self.mdh = None
         self.uh_api = None
+        self.timezone = pytz.timezone(config.get('TIMEZONE', DEFAULT_TIMEZONE))
 
         # S3 configuration from config
         self.data_bucket = config.get('SF_DATA_BUCKET', DEFAULT_DATA_BUCKET)
@@ -77,7 +79,7 @@ class UltrahumanDataUploader:
             self.__uh_config['api_key'] = config.get('UH_PROD_API_KEY')
 
         # Date configuration
-        self.target_date = None
+        self.target_date = kwargs.get('target_date', None)
 
     def _check_create_database(self):
         if self.database_name not in wr.catalog.databases():
@@ -140,7 +142,7 @@ class UltrahumanDataUploader:
                 raise ValueError("Missing required field: target_date")
             
             # Extract optional fields with defaults
-            timezone = message_body.get('timezone', 'America/Phoenix')
+            timezone = message_body.get('timezone', DEFAULT_TIMEZONE)
             custom_fields = message_body.get('custom_fields', {})
             
             participant_data = {
@@ -173,7 +175,7 @@ class UltrahumanDataUploader:
             email = participant.get('email')
         if 'uh_email' in participant and participant.get('uh_email') is not None and participant.get('uh_email') != '':
             email = participant.get('uh_email')
-        timezone = demographics.get('timeZone', 'America/Phoenix')
+        timezone = demographics.get('timeZone', DEFAULT_TIMEZONE)
         
         # Use target_date from SNS message if available, otherwise use instance target_date
         target_date = participant.get('target_date', self.target_date)
@@ -238,7 +240,7 @@ class UltrahumanDataUploader:
                                 'data_date': target_date,
                                 'data_type': 'ultrahuman_metrics',
                                 'metric_type': metric_type,
-                                'upload_timestamp': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                                'upload_timestamp': datetime.datetime.now(self.timezone).isoformat(),
                                 'record_count': str(len(df))
                             }
                         },
@@ -246,15 +248,16 @@ class UltrahumanDataUploader:
                         mode='append',
                     )
                     record_count += len(df)
+                    # Update participant's sync date in MDH
+                    try:
+                        self._update_participant_sync_date(participant_id, timezone)
+                    except Exception as e:
+                        logger.warning(f"Failed to update sync date for participant {participant_id}: {str(e)}")
+                        continue
+                        # Don't fail the entire operation if sync date update fails
+                        # but we may want to push into SQS to notify us something is wrong.
 
             logger.debug(f"Successfully uploaded data for participant {participant_id}")
-            # Update participant's sync date in MDH
-            try:
-                self._update_participant_sync_date(participant_id)
-            except Exception as e:
-                logger.warning(f"Failed to update sync date for participant {participant_id}: {str(e)}")
-                # Don't fail the entire operation if sync date update fails
-                # but we may want to push into SQS to notify us something is wrong.
 
             return {
                 'participant_id': participant_id,
@@ -269,8 +272,8 @@ class UltrahumanDataUploader:
                 'success': False,
                 'error': str(e)
             }
-    
-    def _update_participant_sync_date(self, participant_id: str) -> None:
+
+    def _update_participant_sync_date(self, participant_id: str, timezone: str = DEFAULT_TIMEZONE) -> None:
         """Update participant's uh_sync_date field in MDH.
         
         Args:
@@ -279,30 +282,26 @@ class UltrahumanDataUploader:
         Raises:
             Exception: If update fails
         """
-        try:
-            # Generate current ISO8601 timestamp
-            current_timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
-            
-            # Update participant's custom field
-            update_data = [
-                {
-                    participant_id : {
-                        'customFields': {
-                            'uh_sync_date': current_timestamp
-                        }
+        # Generate current ISO8601 timestamp
+        tz = pytz.timezone(timezone)
+        current_timestamp = datetime.datetime.now(tz).strftime('%m/%d/%Y')
+
+        # Update participant's custom field
+        update_data = [
+            {
+                participant_id : {
+                    'customFields': {
+                        'uh_sync_date': current_timestamp
                     }
                 }
-            ]
-            
-            # Use MDH API to update participant
-            self.mdh.update_participants(update_data)
-            
-            logger.debug(f"Updated uh_sync_date for participant {participant_id} to {current_timestamp}")
-            
-        except Exception as e:
-            logger.error(f"Failed to update sync date for participant {participant_id}: {str(e)}")
-            raise
-    
+            }
+        ]
+        
+        # Use MDH API to update participant
+        self.mdh.update_participants(update_data)
+        
+        logger.debug(f"Updated uh_sync_date for participant {participant_id} to {current_timestamp}")
+
     def process_sns_messages(self, sns_records: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
         Process SNS messages containing participant data for UltraHuman collection.
@@ -570,7 +569,7 @@ def test_locally(participant_id: str = "test_participant", email: str = "test@ex
                         "participant_id": participant_id,
                         "email": email,
                         "target_date": target_date,
-                        "timezone": "America/Phoenix"
+                        "timezone": DEFAULT_TIMEZONE
                     })
                 }
             }

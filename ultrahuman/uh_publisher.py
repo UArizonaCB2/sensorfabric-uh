@@ -287,21 +287,13 @@ class UltrahumanSNSPublisher:
             results = []
             successful_publishes = 0
             failed_publishes = 0
-            success_participants = []
             for participant in participants:
                 result = self._publish_sns_message(participant)
                 results.append(result)
                 if result['success']:
                     successful_publishes += 1
-                    success_participants.append({
-                        'participantIdentifier': participant.get('participantIdentifier'),
-                        'customFields': {'uh_sync_date': self.target_date}
-                    })
                 else:
                     failed_publishes += 1
-            
-            # Update participants in MDH
-            mdh_result = self.mdh.update_participants(success_participants)
 
             return {
                 'success': True,
@@ -310,7 +302,6 @@ class UltrahumanSNSPublisher:
                 'participants_processed': len(participants),
                 'successful_publishes': successful_publishes,
                 'failed_publishes': failed_publishes,
-                'mdh_result': mdh_result,
                 'results': results
             }
             
