@@ -58,7 +58,14 @@ class TemplateGenerator:
         # TODO pull data and compute on the fly from participant id.
         # weeks enrolled comes from MDH participant record
         participant = self.mdh.getParticipant(participant_id)
-        
+        if target_week is None:
+            last_week_utc_timestamp = datetime.datetime.now() - datetime.timedelta(days=7)
+            last_week_utc_timestamp_int = int(last_week_utc_timestamp.timestamp())
+        else:
+            # TODO make target_week processing more robust.
+            # TODO need to use participant's timezone? not sure.
+            last_week_utc_timestamp = datetime.datetime.strptime(target_week, '%Y-%m-%d') - datetime.timedelta(days=7)
+            last_week_utc_timestamp_int = int(last_week_utc_timestamp.timestamp())
         # current_pregnancy_week = math.floor(ga_calculated_today_days / 7)
         # enrolled_date
         # MDH task API:
