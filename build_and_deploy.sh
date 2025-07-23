@@ -234,7 +234,7 @@ deploy_with_cdk() {
         fi
         
         # Deploy CDK stack
-        cdk deploy --require-approval never
+        cdk deploy --all --require-approval never
         
         cd ..
         print_status "CDK deployment completed"

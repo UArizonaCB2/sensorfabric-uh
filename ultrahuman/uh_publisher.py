@@ -252,7 +252,7 @@ class UltrahumanSNSPublisher:
         except Exception as e:
             logger.error(f"Failed to send message to dead letter queue: {str(e)}")
 
-    def publish_participant_messages(self, target_date: Optional[str] = None) -> Dict[str, Any]:
+    def publish_participant_messages(self, target_date: Optional[str] = None, participant_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Main orchestration method for publishing SNS messages for all active participants.
         
@@ -269,8 +269,11 @@ class UltrahumanSNSPublisher:
             # Set target date
             self._set_target_date(target_date)
             
+            if participant_id is not None:
+                participants = [self.mdh.getParticipant(participant_id)]
             # Get active participants
-            participants = self._get_active_participants()
+            else:
+                participants = self._get_active_participants()
             
             if not participants:
                 return {
@@ -386,12 +389,15 @@ def lambda_handler(event, context):
 
     try:
         publisher = UltrahumanSNSPublisher(config=secrets)
-        
+
         # Extract target date from event if provided
         target_date = event.get('target_date', None)
-        
+        participant_id = event.get('participant_id', None)
         # Publish messages for all participants
-        result = publisher.publish_participant_messages(target_date)
+        if participant_id is not None:
+            result = publisher.publish_participant_messages(target_date, participant_id)
+        else:
+            result = publisher.publish_participant_messages(target_date)
         
         # Prepare Lambda response
         response = {

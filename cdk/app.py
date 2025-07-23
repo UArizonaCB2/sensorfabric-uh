@@ -23,6 +23,19 @@ config = StackConfig(
     uh_environment=app.node.try_get_context("uh_environment") or "production"
 )
 
+prodConfig = StackConfig(
+    stack_name="Ultrahuman-Prod",
+    environment="production",
+    ecr_registry="509812589231.dkr.ecr.us-east-1.amazonaws.com",
+    ecr_repository="uh-biobayb",
+    project_name="uh-biobayb-prod",
+    database_name="uh-biobayb-prod",
+    sns_topic_name="mdh_uh_sync_prod",
+    aws_secret_name="prod/biobayb/uh-prod/prod-keys",
+    sf_data_bucket="uoa-biobayb-uh-prod",
+    uh_environment="production"
+)
+
 # TODO: add other stacks.
 # recommend using the same ECR registry since we're not changing out the lambda code per stack
 # prod_stack = StackConfig(
@@ -40,11 +53,19 @@ config = StackConfig(
 
 # Create the Lambda stack using the stack_name as construct_id
 SensorFabricLambdaStack(
-    app, 
+    app,
     config.stack_name,
     config=config,
     env=cdk.Environment(account=account, region=region),
-    description=f"SensorFabric Lambda functions for {config.stack_name} deployed via Docker containers"
+    description=f"SensorFabric Staging - {config.stack_name} deployed via Docker containers"
+)
+
+SensorFabricLambdaStack(
+    app,
+    prodConfig.stack_name,
+    config=prodConfig,
+    env=cdk.Environment(account=account, region=region),
+    description=f"SensorFabric Production - {prodConfig.stack_name} deployed via Docker containers"
 )
 
 app.synth()
