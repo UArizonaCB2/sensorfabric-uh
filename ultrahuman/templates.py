@@ -6,13 +6,12 @@ from sensorfabric.mdh import MDH
 
 class TemplateGenerator:
     """
-    AWS Lambda function for SNS-driven UltraHuman sensor data collection.
+    AWS Lambda function for generating weekly health reports from MDH / UltraHuman API data.
     
     This class handles:
-    1. Processing SNS messages containing participant data
-    2. Collecting UltraHuman sensor data for specified participants
-    3. Uploading parquet data to S3 in organized folder structure
-    4. Updating participant sync dates in MDH
+    1. Connecting to MDH/Athena
+    2. Running SQL queries to gather data
+    3. Generating Jinja2 HTML template
     """
     
     def __init__(self, config: Dict[str, Any], **kwargs):
