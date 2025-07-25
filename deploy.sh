@@ -3,7 +3,7 @@
 # Comprehensive deployment automation script for SensorFabric Lambda functions
 # This script provides a complete deployment pipeline with validation and rollback capabilities
 
-set -e  # Exit on any error
+# set -e  # Exit on any error. this will break the script because of how aws responds waiting for lambda updates sometimes.
 
 # Configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -12,6 +12,8 @@ ECR_REGISTRY="509812589231.dkr.ecr.us-east-1.amazonaws.com"
 ECR_REPOSITORY="uh-biobayb"
 AWS_REGION="us-east-1"
 CDK_DIR="$SCRIPT_DIR/cdk"
+DOCKER_DIR="docker"
+BUILD_DIR="build"
 
 # Lambda function mappings - will be populated dynamically
 declare -A LAMBDA_FUNCTIONS
@@ -150,6 +152,241 @@ log_debug() {
     if [ "$DEBUG" = "true" ]; then
         echo -e "${PURPLE}[DEBUG]${NC} $(date '+%Y-%m-%d %H:%M:%S') - $1"
     fi
+}
+
+# Build-related functions
+ecr_login() {
+    log_header "Authenticating with ECR..."
+    
+    aws ecr get-login-password --region $AWS_REGION | \
+        docker login --username AWS --password-stdin $ECR_REGISTRY
+    
+    if [ $? -eq 0 ]; then
+        log_info "Successfully authenticated with ECR"
+    else
+        log_error "Failed to authenticate with ECR"
+        exit 1
+    fi
+}
+
+setup_build_directories() {
+    log_header "Setting up build directories..."
+    
+    # Clean up existing build directory
+    if [ -d "$BUILD_DIR" ]; then
+        rm -rf "$BUILD_DIR"
+    fi
+    
+    # Create build directories for each lambda function type
+    for func_type in "uh_uploader" "uh_publisher"; do
+        mkdir -p "$BUILD_DIR/$func_type"
+        
+        # Copy requirements.txt
+        cp requirements.txt "$BUILD_DIR/$func_type/"
+        
+        # Copy entire ultrahuman package
+        cp -r ultrahuman/ "$BUILD_DIR/$func_type/"
+        
+        # Copy and customize Dockerfile
+        cp "$DOCKER_DIR/Dockerfile" "$BUILD_DIR/$func_type/"
+        
+        # Update CMD in Dockerfile to point to correct handler
+        sed -i "s/CMD \[\".*\"\]/CMD [\"ultrahuman.${func_type}.lambda_handler\"]/" "$BUILD_DIR/$func_type/Dockerfile"
+        
+        log_info "Created build directory for $func_type"
+    done
+}
+
+build_lambda_image() {
+    local func_type=$1
+    local docker_tag="biobayb_${func_type}"
+    local image_name="$ECR_REGISTRY/$ECR_REPOSITORY:$docker_tag"
+    local build_context="$BUILD_DIR/$func_type"
+    
+    log_header "Building Docker image for $func_type -> $docker_tag..."
+    
+    # Build the Docker image
+    docker buildx build --platform linux/amd64 --provenance=false \
+        -t "$image_name" \
+        -f "$build_context/Dockerfile" \
+        "$build_context"
+    
+    if [ $? -eq 0 ]; then
+        log_info "Successfully built $image_name"
+        
+        # Tag with version if available
+        if [ -n "$VERSION" ]; then
+            local versioned_image="$ECR_REGISTRY/$ECR_REPOSITORY:$docker_tag-$VERSION"
+            docker tag "$image_name" "$versioned_image"
+            log_info "Tagged $versioned_image"
+        fi
+    else
+        log_error "Failed to build $image_name"
+        exit 1
+    fi
+}
+
+push_to_ecr() {
+    local func_type=$1
+    local docker_tag="biobayb_${func_type}"
+    local image_name="$ECR_REGISTRY/$ECR_REPOSITORY:$docker_tag"
+    
+    log_header "Pushing image to ECR: $image_name"
+    
+    docker push "$image_name"
+    
+    if [ $? -eq 0 ]; then
+        log_info "Successfully pushed $image_name to ECR"
+        
+        # Push versioned image if available
+        if [ -n "$VERSION" ]; then
+            local versioned_image="$ECR_REGISTRY/$ECR_REPOSITORY:$docker_tag-$VERSION"
+            docker push "$versioned_image"
+            log_info "Successfully pushed $versioned_image to ECR"
+        fi
+    else
+        log_error "Failed to push $image_name to ECR"
+        exit 1
+    fi
+}
+
+update_lambda_functions() {
+    log_header "Updating Lambda functions with new container images..."
+    
+    local total_updated=0
+    local total_failed=0
+    
+    for local_func in "${!LAMBDA_FUNCTIONS[@]}"; do
+        local aws_func=${LAMBDA_FUNCTIONS[$local_func]}
+        
+        # Determine function type from the key
+        local func_type=""
+        if [[ "$local_func" == *"uh_uploader" ]]; then
+            func_type="uh_uploader"
+        elif [[ "$local_func" == *"uh_publisher" ]]; then
+            func_type="uh_publisher"
+        else
+            log_warning "Cannot determine function type for $local_func, skipping..."
+            continue
+        fi
+        
+        local docker_tag="biobayb_${func_type}"
+        local image_uri="$ECR_REGISTRY/$ECR_REPOSITORY:$docker_tag"
+        
+        log_info "Updating Lambda function: $aws_func with image: $image_uri"
+        
+        # Update function code to use new container image
+        if aws lambda update-function-code \
+            --function-name "$aws_func" \
+            --image-uri "$image_uri" \
+            --region "$AWS_REGION" \
+            --output table; then
+            
+            log_info "Successfully updated Lambda function $aws_func"
+            
+            # Wait for function to be updated
+            log_info "Waiting for function update to complete..."
+            if ! timeout 300 aws lambda wait function-updated --function-name "$aws_func" --region "$AWS_REGION"; then
+                log_warning "Wait for function update timed out or failed for $aws_func, but update likely succeeded"
+            else
+                log_info "Function update completed for $aws_func"
+            fi
+            ((total_updated++))
+        else
+            log_error "Failed to update Lambda function $aws_func"
+            ((total_failed++))
+        fi
+    done
+    
+    # Summary
+    if [ $total_failed -eq 0 ]; then
+        log_info "Successfully updated all $total_updated Lambda functions"
+    else
+        log_error "Updated $total_updated functions, but $total_failed failed"
+        if [ $total_updated -eq 0 ]; then
+            exit 1
+        fi
+    fi
+}
+
+deploy_with_cdk() {
+    if [ -d "$CDK_DIR" ]; then
+        log_header "Deploying infrastructure with CDK..."
+        
+        cd "$CDK_DIR"
+        
+        # Install CDK dependencies if needed
+        if [ -f "requirements.txt" ]; then
+            pip install -r requirements.txt
+        fi
+        
+        # Deploy CDK stack
+        cdk deploy --all --require-approval never
+        
+        cd ..
+        log_info "CDK deployment completed"
+    else
+        log_warning "CDK directory not found. Skipping CDK deployment."
+    fi
+}
+
+build_pipeline() {
+    log_header "Starting build pipeline..."
+    
+    # Check Docker daemon
+    if ! docker info &> /dev/null; then
+        log_error "Docker daemon is not running"
+        exit 1
+    fi
+    
+    # ECR authentication
+    ecr_login
+    
+    # Setup build directories
+    setup_build_directories
+    
+    # Build and push each lambda function type
+    for func_type in "uh_uploader" "uh_publisher"; do
+        build_lambda_image "$func_type"
+        push_to_ecr "$func_type"
+    done
+    
+    # Clean up build artifacts
+    cleanup_build_artifacts
+    
+    log_info "Build pipeline completed successfully"
+}
+
+cleanup_build_artifacts() {
+    log_header "Cleaning up build artifacts..."
+    
+    # Remove build directory
+    if [ -d "$BUILD_DIR" ]; then
+        rm -rf "$BUILD_DIR"
+        log_info "Removed build directory"
+    fi
+    
+    # Remove local Docker images
+    for func_type in "uh_uploader" "uh_publisher"; do
+        local docker_tag="biobayb_${func_type}"
+        local image_name="$ECR_REGISTRY/$ECR_REPOSITORY:$docker_tag"
+        
+        if docker images -q "$image_name" &> /dev/null; then
+            docker rmi "$image_name" &> /dev/null || true
+            log_info "Removed local image: $image_name"
+        fi
+        
+        # Remove versioned image if exists
+        if [ -n "$VERSION" ]; then
+            local versioned_image="$ECR_REGISTRY/$ECR_REPOSITORY:$docker_tag-$VERSION"
+            if docker images -q "$versioned_image" &> /dev/null; then
+                docker rmi "$versioned_image" &> /dev/null || true
+                log_info "Removed local versioned image: $versioned_image"
+            fi
+        fi
+    done
+    
+    log_info "Cleanup completed"
 }
 
 # Validation functions
@@ -418,12 +655,15 @@ deploy_pipeline() {
     # Create backup
     backup_lambda_functions
     
-    # Run build and deploy
-    log_info "Running build and deploy script..."
+    # Run build pipeline
+    build_pipeline
+    
+    # Deploy
+    log_header "Starting deployment phase..."
     if [ "$deployment_method" = "cdk" ]; then
-        "$SCRIPT_DIR/build_and_deploy.sh" --use-cdk
+        deploy_with_cdk
     else
-        "$SCRIPT_DIR/build_and_deploy.sh"
+        update_lambda_functions
     fi
     
     # Wait for deployment to stabilize
@@ -455,6 +695,8 @@ main() {
     local deployment_method="direct"
     local skip_tests=false
     local action="deploy"
+    local build_only=false
+    local deploy_only=false
     
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -464,6 +706,16 @@ main() {
                 ;;
             --skip-tests)
                 skip_tests=true
+                shift
+                ;;
+            --build-only)
+                build_only=true
+                action="build-only"
+                shift
+                ;;
+            --deploy-only)
+                deploy_only=true
+                action="deploy-only"
                 shift
                 ;;
             --rollback)
@@ -495,6 +747,8 @@ Comprehensive deployment automation for Ultrahuman SensorFabric Lambda functions
 Options:
   --cdk                 Use CDK for deployment instead of direct Lambda updates
   --skip-tests          Skip function testing after deployment
+  --build-only          Only build and push images, don't deploy
+  --deploy-only         Only deploy (assumes images already exist in ECR)
   --rollback            Rollback to previous deployment
   --health-check        Perform health check only
   --test                Run tests only
@@ -503,8 +757,10 @@ Options:
   --help, -h            Show this help message
 
 Examples:
-  $0                    # Deploy with direct Lambda updates
-  $0 --cdk              # Deploy using CDK
+  $0                    # Build and deploy with direct Lambda updates
+  $0 --cdk              # Build and deploy using CDK
+  $0 --build-only       # Only build and push to ECR
+  $0 --deploy-only      # Only deploy from existing ECR images
   $0 --skip-tests       # Deploy without running tests
   $0 --rollback         # Rollback to previous version
   $0 --health-check     # Check current deployment health
@@ -528,6 +784,18 @@ EOF
     case $action in
         deploy)
             deploy_pipeline "$deployment_method" "$skip_tests"
+            ;;
+        build-only)
+            validate_prerequisites
+            build_pipeline
+            ;;
+        deploy-only)
+            validate_prerequisites
+            if [ "$deployment_method" = "cdk" ]; then
+                deploy_with_cdk
+            else
+                update_lambda_functions
+            fi
             ;;
         rollback)
             rollback_deployment
