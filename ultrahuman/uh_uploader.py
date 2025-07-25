@@ -11,6 +11,7 @@ from ultrahuman.uh import UltrahumanAPI
 from ultrahuman.utils import flatten_json_to_columns, convert_dict_timestamps, validate_sensor_data_schema
 import pandas as pd
 import jsonschema
+import pytz
 
 
 # Configure logging
