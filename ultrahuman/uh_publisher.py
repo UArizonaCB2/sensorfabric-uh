@@ -26,9 +26,6 @@ logging.getLogger("boto3").setLevel(logging.WARNING)
 logging.getLogger("botocore").setLevel(logging.WARNING)
 
 
-logger.info("In ultrahuman/uh_publisher.py")
-
-
 DEFAULT_PROJECT_NAME = 'uh-biobayb-dev'
 
 
@@ -349,11 +346,9 @@ def get_secret():
     else:
         if 'SecretString' in get_secret_value_response:
             secret = get_secret_value_response['SecretString']
-            logger.info(f"SecretString: {secret}")
             return json.loads(secret)
         else:
             decoded_binary_secret = base64.b64decode(get_secret_value_response['SecretBinary'])
-            logger.info(f"Decoded binary secret: {decoded_binary_secret}")
             return json.loads(decoded_binary_secret)
 
 

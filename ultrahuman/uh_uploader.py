@@ -29,9 +29,6 @@ else:
 logging.getLogger("boto3").setLevel(logging.WARNING)
 logging.getLogger("botocore").setLevel(logging.WARNING)
 
-logger.info("In ultrahuman/uh_uploader.py")
-
-
 DEFAULT_DATABASE_NAME = 'uh-biobayb-dev'
 DEFAULT_DATA_BUCKET = 'uoa-biobayb-uh-dev'
 DEFAULT_PROJECT_NAME = 'uh-biobayb-dev'
