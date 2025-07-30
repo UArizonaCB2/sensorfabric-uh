@@ -12,7 +12,7 @@ from sensorfabric.mdh import MDH
 
 # Configure logging
 logger = logging.getLogger()
-DEFAULT_LOG_LEVEL = logging.INFO
+DEFAULT_LOG_LEVEL = os.getenv('LOG_LEVEL', logging.DEBUG)
 
 if logging.getLogger().hasHandlers():
     # The Lambda environment pre-configures a handler logging to stderr. If a handler is already configured,
@@ -69,7 +69,7 @@ class UltrahumanSNSPublisher:
                 'project_id': self.__config.get('MDH_PROJECT_ID'),
             }
             self.mdh = MDH(**mdh_configuration)
-            logger.info("MDH connection initialized successfully")
+            logger.debug("MDH connection initialized successfully")
             
         except Exception as e:
             logger.error(f"Failed to initialize MDH connection: {str(e)}")
@@ -86,7 +86,7 @@ class UltrahumanSNSPublisher:
         else:
             self.target_date = target_date
 
-        logger.info(f"Target date set to: {self.target_date}")
+        logger.debug(f"Target date set to: {self.target_date}")
 
     def _get_active_participants(self) -> List[Dict[str, Any]]:
         """Fetch active participants from MDH."""
@@ -104,7 +104,7 @@ class UltrahumanSNSPublisher:
                 if participant.get('enrolled'):
                     active_participants.append(participant)
 
-            logger.info(f"Found {len(active_participants)} active participants")
+            logger.debug(f"Found {len(active_participants)} active participants")
             return active_participants
 
         except Exception as e:
@@ -272,6 +272,8 @@ class UltrahumanSNSPublisher:
             else:
                 participants = self._get_active_participants()
             
+            logger.info(f"Found participants: {participants}")
+
             if not participants:
                 return {
                     'success': True,
@@ -377,7 +379,7 @@ def lambda_handler(event, context):
     - UH_PROD_API_KEY: Production API key for UltraHuman API
     """
     
-    logger.info(f"UltraHuman SNS Publisher Lambda started with event: {json.dumps(event)}")
+    logger.debug(f"UltraHuman SNS Publisher Lambda started with event: {json.dumps(event)}")
 
     # setup environment with secrets
     secrets = get_secret()
@@ -403,7 +405,7 @@ def lambda_handler(event, context):
             }
         }
         
-        logger.info(f"UltraHuman SNS Publisher completed: {json.dumps(result)}")
+        logger.debug(f"UltraHuman SNS Publisher completed: {json.dumps(result)}")
         return response
         
     except Exception as e:

@@ -84,7 +84,7 @@ class SensorFabricLambdaStack(Stack):
             raise ValueError(f"Environment '{config.environment}' must be one of: {valid_environments}")
 
         # Environment variables:
-        # biobayb_uh_sns_publisher: AWS_SECRET_NAME, UH_DLQ_URL, UH_SNS_TOPIC_ARN
+        # biobayb_uh_publisher: AWS_SECRET_NAME, UH_DLQ_URL, UH_SNS_TOPIC_ARN
         # biobayb_uh_uploader: SF_DATA_BUCKET, UH_ENVIRONMENT, AWS_SECRET_NAME
         # Both functions have access to AWS Secrets Manager secret 'prod/biobayb/uh/keys'
 
@@ -97,10 +97,11 @@ class SensorFabricLambdaStack(Stack):
                 "environment": {
                     "UH_ENVIRONMENT": self.config.uh_environment,
                     "SF_DATA_BUCKET": self.config.sf_data_bucket,
+                    "SF_DATABASE_NAME": self.config.database_name,
                     "AWS_SECRET_NAME": self.config.aws_secret_name
                 }
             },
-            "biobayb_uh_sns_publisher": {
+            "biobayb_uh_publisher": {
                 "description": "UltraHuman SNS publisher Lambda function",
                 "timeout": Duration.minutes(5),
                 "memory_size": 2048,
@@ -316,9 +317,9 @@ class SensorFabricLambdaStack(Stack):
             )
 
         # Grant publish permissions to the publisher Lambda alias
-        if "biobayb_uh_sns_publisher" in self.lambda_aliases:
+        if "biobayb_uh_publisher" in self.lambda_aliases:
             self.uh_data_collection_topic.grant_publish(
-                self.lambda_aliases["biobayb_uh_sns_publisher"]
+                self.lambda_aliases["biobayb_uh_publisher"]
             )
 
     def create_sqs_resources(self) -> None:
@@ -344,7 +345,7 @@ class SensorFabricLambdaStack(Stack):
         """Create EventBridge rules for scheduled Lambda executions using aliases."""
         
         # Schedule for SNS publisher (runs daily at midnight AZ time UTC-7)
-        if "biobayb_uh_sns_publisher" in self.lambda_aliases:
+        if "biobayb_uh_publisher" in self.lambda_aliases:
             publisher_rule = events.Rule(
                 self, f"{self.config.project_name}_UHPublisherScheduleRule",
                 description="Schedule for UltraHuman SNS publisher",
@@ -358,7 +359,7 @@ class SensorFabricLambdaStack(Stack):
             )
             
             publisher_rule.add_target(
-                targets.LambdaFunction(self.lambda_aliases["biobayb_uh_sns_publisher"])
+                targets.LambdaFunction(self.lambda_aliases["biobayb_uh_publisher"])
             )
 
         # Manual trigger capability for uploader
@@ -381,7 +382,7 @@ class SensorFabricLambdaStack(Stack):
         """Update Lambda functions with dynamic environment variables."""
         
         # Add SNS topic ARN and DLQ URL to SNS publisher
-        if "biobayb_uh_sns_publisher" in self.lambda_functions:
-            publisher_lambda = self.lambda_functions["biobayb_uh_sns_publisher"]
+        if "biobayb_uh_publisher" in self.lambda_functions:
+            publisher_lambda = self.lambda_functions["biobayb_uh_publisher"]
             publisher_lambda.add_environment("UH_SNS_TOPIC_ARN", self.uh_data_collection_topic.topic_arn)
             publisher_lambda.add_environment("UH_DLQ_URL", self.uh_dlq.queue_url)

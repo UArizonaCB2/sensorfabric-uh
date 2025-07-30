@@ -16,7 +16,8 @@ import pytz
 
 # Configure logging
 logger = logging.getLogger()
-DEFAULT_LOG_LEVEL = logging.INFO
+DEFAULT_LOG_LEVEL = os.getenv('LOG_LEVEL', logging.DEBUG)
+
 
 if logging.getLogger().hasHandlers():
     # The Lambda environment pre-configures a handler logging to stderr. If a handler is already configured,
@@ -30,7 +31,6 @@ logging.getLogger("boto3").setLevel(logging.WARNING)
 logging.getLogger("botocore").setLevel(logging.WARNING)
 
 DEFAULT_DATABASE_NAME = 'uh-biobayb-dev'
-DEFAULT_DATA_BUCKET = 'uoa-biobayb-uh-dev'
 DEFAULT_PROJECT_NAME = 'uh-biobayb-dev'
 DEFAULT_TIMEZONE = 'America/Phoenix'
 
@@ -52,12 +52,13 @@ class UltrahumanDataUploader:
         self.timezone = pytz.timezone(config.get('TIMEZONE', DEFAULT_TIMEZONE))
 
         # S3 configuration from config
-        self.data_bucket = config.get('SF_DATA_BUCKET', DEFAULT_DATA_BUCKET)
-        self.database_name = config.get('SF_DATABASE_NAME', DEFAULT_DATABASE_NAME)
+        self.data_bucket = os.getenv('SF_DATA_BUCKET', None)
+        self.database_name = os.getenv('SF_DATABASE_NAME', None)
         # data bucket is required for upload. default to 
-        if not self.data_bucket:
+        if self.data_bucket is None:
             raise ValueError("SF_DATA_BUCKET environment variable must be set")
-        
+        if self.database_name is None:
+            raise ValueError("SF_DATABASE_NAME environment variable must be set")
         # MDH configuration from config
         self.__mdh_config = {
             'account_secret': config.get('MDH_SECRET_KEY'),
@@ -67,23 +68,19 @@ class UltrahumanDataUploader:
 
         # UH configuration
         self.__uh_config = {
-            'environment': config.get('UH_ENVIRONMENT', 'development'),
+            'environment': os.getenv('UH_ENVIRONMENT', 'production'),
+            'api_key': config.get('UH_API_KEY', None),
+            'base_url': config.get('UH_BASE_URL', None)
         }
-        if self.__uh_config['environment'] == 'development':
-            self.__uh_config['base_url'] = config.get('UH_DEV_BASE_URL')
-            self.__uh_config['api_key'] = config.get('UH_DEV_API_KEY')
-        elif self.__uh_config['environment'] == 'production':
-            self.__uh_config['base_url'] = config.get('UH_PROD_BASE_URL')
-            self.__uh_config['api_key'] = config.get('UH_PROD_API_KEY')
 
         # Date configuration
         self.target_date = kwargs.get('target_date', None)
 
     def _check_create_database(self):
         if self.database_name not in wr.catalog.databases():
-            logger.info(f"Database {self.database_name} does not exist. Creating...")
+            logger.debug(f"Database {self.database_name} does not exist. Creating...")
             wr.catalog.create_database(self.database_name, exist_ok=True)
-            logger.info(f"Created database: {self.database_name}")
+            logger.debug(f"Created database: {self.database_name}")
 
     def _initialize_connections(self):
         """Initialize MDH and Ultrahuman API connections."""
@@ -125,7 +122,7 @@ class UltrahumanDataUploader:
         try:
             # Parse the SNS message body
             message_body = json.loads(sns_message.get('Message', '{}'))
-            
+            logger.debug(f"Processing SNS message: {message_body}")
             # Extract required fields
             participant_id = message_body.get('participant_id')
             email = message_body.get('email')
@@ -177,6 +174,7 @@ class UltrahumanDataUploader:
         
         # Use target_date from SNS message if available, otherwise use instance target_date
         target_date = participant.get('target_date', self.target_date)
+        logger.debug(f"Collecting data for participant {participant_id} on {target_date}")
         if not email:
             logger.warning(f"No email found for participant {participant_id}")
             return {'participant_id': participant_id, 'success': False, 'error': 'No email found'}
@@ -203,13 +201,13 @@ class UltrahumanDataUploader:
                     continue
                 flattened = flatten_json_to_columns(json_data=metric, participant_id=participant_id, fill=True)
                 converted = convert_dict_timestamps(flattened, timezone)
+                # logger.debug(f"Flattened data: {flattened}")
+                logger.debug(f"Converted data: {converted}")
+                # logger.debug(f"Metric type: {metric_type}")
                 try:
-                    obj_values = converted.get('object_values', None)
-                    obj_total = converted.get('object_total', None)
                     obj_values_value = converted.get('object_values_value', None)
-
                     # if any of these are None, then we have empty data.
-                    if obj_values is None or obj_total is None or obj_values_value is None:
+                    if obj_values_value is None:
                         logger.debug(f"Empty sensor data for participant {participant_id}, metric {metric_type}")
                         continue
 
@@ -313,7 +311,7 @@ class UltrahumanDataUploader:
         try:
             # Initialize connections
             self._initialize_connections()
-            
+            logger.debug(f"Processing {len(sns_records)} SNS records")
             if not sns_records:
                 return {
                     'success': True,
@@ -330,6 +328,7 @@ class UltrahumanDataUploader:
             total_data_size = 0
             
             for record in sns_records:
+                logger.debug(f"Processing SNS record: {record}")
                 try:
                     # Extract participant data from SNS message
                     participant_data = self._process_sns_message(record['Sns'])
@@ -370,43 +369,6 @@ class UltrahumanDataUploader:
                 'success': False,
                 'error': str(e),
                 'message': 'SNS message processing failed'
-            }
-    
-    def collect_daily_data(self, target_date: Optional[str] = None) -> Dict[str, Any]:
-        """
-        Legacy method for collecting daily UltraHuman data (scheduled mode).
-        
-        Args:
-            target_date: Optional date string (YYYY-MM-DD) to collect data for specific date
-            
-        Returns:
-            Dictionary with collection results and statistics
-        """
-        logger.warning("collect_daily_data is deprecated. Use process_sns_messages for SNS-based processing.")
-        
-        try:
-            # Initialize connections
-            self._initialize_connections()
-            
-            # Set target date
-            self._set_target_date(target_date)
-            
-            return {
-                'success': False,
-                'message': 'Scheduled mode not supported. Use SNS-based processing.',
-                'target_date': self.target_date,
-                'participants_processed': 0,
-                'successful_uploads': 0,
-                'failed_uploads': 0
-            }
-            
-        except Exception as e:
-            logger.error(f"Legacy daily data collection failed: {str(e)}")
-            logger.error(traceback.format_exc())
-            return {
-                'success': False,
-                'error': str(e),
-                'message': 'Legacy daily data collection failed'
             }
 
 
@@ -472,20 +434,19 @@ def lambda_handler(event, context):
     - MDH_ACCOUNT_NAME: MyDataHelps account name
     - MDH_PROJECT_NAME: MyDataHelps project name
     - MDH_PROJECT_ID: MyDataHelps project ID
-    - UH_DEV_BASE_URL: Development base URL for UltraHuman API
-    - UH_DEV_API_KEY: Development API key for UltraHuman API
-    - UH_PROD_BASE_URL: Production base URL for UltraHuman API
-    - UH_PROD_API_KEY: Production API key for UltraHuman API
+    - UH_BASE_URL: Development base URL for UltraHuman API
+    - UH_API_KEY: Development API key for UltraHuman API
     """
     
-    logger.info(f"UltraHuman SNS data collection Lambda started with event: {json.dumps(event)}")
+    logger.debug(f"UltraHuman SNS data collection Lambda started with event: {json.dumps(event)}")
 
     # setup environment with secrets
     secrets = get_secret()
 
     try:
         uploader = UltrahumanDataUploader(config=secrets)
-
+        # logger.info("got event:")
+        # logger.info(event)
         # Check if this is an SNS event
         if 'Records' in event:
             # Process SNS records
@@ -521,8 +482,8 @@ def lambda_handler(event, context):
                 'Content-Type': 'application/json'
             }
         }
-        
-        logger.info(f"UltraHuman SNS data collection completed: {json.dumps(result)}")
+        logger.info(f"UltraHuman SNS data collection completed")
+        logger.debug(f"Result: {json.dumps(result)}")
         return response
         
     except Exception as e:

@@ -41,7 +41,7 @@ discover_lambda_functions() {
     log_debug "Querying AWS Lambda for functions matching our pattern..."
     local functions_json=$(aws lambda list-functions \
         --region "$AWS_REGION" \
-        --query 'Functions[?contains(FunctionName, `_biobayb_uh_uploader_Lambda`) || contains(FunctionName, `_biobayb_uh_sns_publisher_Lambda`)].FunctionName' \
+        --query 'Functions[?contains(FunctionName, `_biobayb_uh_uploader_Lambda`) || contains(FunctionName, `_biobayb_uh_publisher_Lambda`)].FunctionName' \
         --output json 2>/dev/null || echo "[]")
     
     log_debug "Raw AWS response: $functions_json"
@@ -92,9 +92,9 @@ discover_lambda_functions() {
             local key="${project_name}-uh_uploader"
             LAMBDA_FUNCTIONS["$key"]="$func"
             log_info "Mapped $key -> $func"
-        elif [[ "$func" == *"_biobayb_uh_sns_publisher_Lambda" ]]; then
-            # Extract project name from function name (format: {project_name}_biobayb_uh_sns_publisher_Lambda)
-            local project_name="${func%_biobayb_uh_sns_publisher_Lambda}"
+        elif [[ "$func" == *"_biobayb_uh_publisher_Lambda" ]]; then
+            # Extract project name from function name (format: {project_name}_biobayb_uh_publisher_Lambda)
+            local project_name="${func%_biobayb_uh_publisher_Lambda}"
             log_debug "Extracted project name for publisher: '$project_name'"
             
             # Apply stack filter if specified (match against project name)
@@ -187,11 +187,12 @@ setup_build_directories() {
         # Copy entire ultrahuman package
         cp -r ultrahuman/ "$BUILD_DIR/$func_type/"
         
-        # Copy and customize Dockerfile
-        cp "$DOCKER_DIR/Dockerfile" "$BUILD_DIR/$func_type/"
+        # Copy the specific Dockerfile for this function type
+        cp "$DOCKER_DIR/Dockerfile.$func_type" "$BUILD_DIR/$func_type/Dockerfile"
         
-        # Update CMD in Dockerfile to point to correct handler
-        sed -i "s/CMD \[\".*\"\]/CMD [\"ultrahuman.${func_type}.lambda_handler\"]/" "$BUILD_DIR/$func_type/Dockerfile"
+        # Add cache busting to ensure fresh builds
+        # local cache_bust=$(date +%s)
+        # echo "# Cache bust: $cache_bust" >> "$BUILD_DIR/$func_type/Dockerfile"
         
         log_info "Created build directory for $func_type"
     done
@@ -291,6 +292,47 @@ update_lambda_functions() {
             else
                 log_info "Function update completed for $aws_func"
             fi
+            
+            # Check if function has aliases and update them
+            log_info "Checking for aliases on $aws_func..."
+            local aliases=$(aws lambda list-aliases \
+                --function-name "$aws_func" \
+                --region "$AWS_REGION" \
+                --query 'Aliases[].Name' \
+                --output text 2>/dev/null || echo "")
+            
+            if [ -n "$aliases" ] && [ "$aliases" != "None" ]; then
+                # Publish a new version from $LATEST
+                log_info "Publishing new version for $aws_func..."
+                local new_version=$(aws lambda publish-version \
+                    --function-name "$aws_func" \
+                    --region "$AWS_REGION" \
+                    --query 'Version' \
+                    --output text 2>/dev/null)
+                
+                if [ -n "$new_version" ] && [ "$new_version" != "None" ]; then
+                    log_info "Published version $new_version for $aws_func"
+                    
+                    for alias in $aliases; do
+                        log_info "Updating alias '$alias' to point to version $new_version..."
+                        if aws lambda update-alias \
+                            --function-name "$aws_func" \
+                            --name "$alias" \
+                            --function-version "$new_version" \
+                            --region "$AWS_REGION" \
+                            --output table; then
+                            log_info "Successfully updated alias '$alias' for $aws_func"
+                        else
+                            log_warning "Failed to update alias '$alias' for $aws_func"
+                        fi
+                    done
+                else
+                    log_warning "Failed to publish new version for $aws_func, skipping alias updates"
+                fi
+            else
+                log_info "No aliases found for $aws_func"
+            fi
+            
             ((total_updated++))
         else
             log_error "Failed to update Lambda function $aws_func"
@@ -428,7 +470,7 @@ validate_prerequisites() {
     fi
     
     # Check project structure
-    local required_files=("requirements.txt" "ultrahuman/" "docker/Dockerfile")
+    local required_files=("requirements.txt" "ultrahuman/" "docker/Dockerfile.uh_uploader" "docker/Dockerfile.uh_publisher")
     for file in "${required_files[@]}"; do
         if [ ! -e "$SCRIPT_DIR/$file" ]; then
             log_error "Required file/directory not found: $file"

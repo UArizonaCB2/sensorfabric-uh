@@ -20,10 +20,8 @@ class UltrahumanAPI:
     
     Environment variables:
     - UH_ENVIRONMENT: 'development' or 'production' (default: 'development')
-    - UH_DEV_API_KEY: API key for development/staging environment
-    - UH_DEV_BASE_URL: Base URL for development/staging environment
-    - UH_PROD_API_KEY: API key for production environment  
-    - UH_PROD_BASE_URL: Base URL for production environment
+    - UH_BASE_URL: Base URL for the UH API
+    - UH_API_KEY: API key
     """
 
     def __init__(self, config: Dict[str, Any]):
@@ -37,26 +35,17 @@ class UltrahumanAPI:
             If not provided, will read from UH_ENVIRONMENT env var.
             Defaults to 'development' if not set.
         """
-        self.environment = config.get('environment', 'development')
-        
-        if self.environment not in ['development', 'production']:
-            raise ValueError("Environment must be 'development' or 'production'")
-            
-        if self.environment == 'development':
-            self.__base_url = DEFAULT_DEV_BASE_URL
-            self.__api_key = DEFAULT_DEV_API_KEY
-        else:
-            self.__base_url = config.get('base_url', DEFAULT_PROD_BASE_URL)
-            self.__api_key = config.get('api_key', None)
+        self.environment = os.getenv("UH_ENVIRONMENT", None)
+        if self.environment is None:
+            raise ValueError("UH_ENVIRONMENT environment variable must be set")
+        self.__base_url = config.get("base_url", DEFAULT_PROD_BASE_URL)
+        self.__api_key = config.get("api_key", None)
 
         if self.__api_key is None:
             # try getting from environment as a last resort.
             # if still not found, raise error
             logger.debug(f"API key not found in config. Trying environment variables.")
-            if self.environment == 'development':
-                self.__api_key = os.getenv("UH_DEV_API_KEY", None)
-            elif self.environment == 'production':
-                self.__api_key = os.getenv("UH_PROD_API_KEY", None)
+            self.__api_key = os.getenv("UH_API_KEY", None)
             if self.__api_key is None:
                 raise ValueError("API key is required")
 
@@ -156,8 +145,7 @@ class UltrahumanAPI:
             response = requests.get(
                 self.__base_url,
                 headers=headers,
-                params=params,
-                timeout=30
+                params=params
             )
             response.raise_for_status()
             return response.json()
@@ -309,79 +297,3 @@ class UltrahumanAPI:
             f.write(parquet_bytes)
             
         return filename
-
-
-# Convenience functions for quick access
-def get_participant_metrics(email: str, date: Optional[str] = None, environment: str = 'development') -> Dict[str, Any]:
-    """
-    Convenience function to get metrics data for a participant.
-    
-    Parameters
-    ----------
-    email : str
-        Participant email address
-    date : str, optional
-        Date in various formats (ISO8601, DD/MM/YYYY, etc.).
-        Defaults to today's date if not provided.
-    environment : str
-        Environment to use ('development' or 'production')
-        
-    Returns
-    -------
-    dict
-        JSON response from the API
-    """
-    client = UltrahumanAPI(environment=environment)
-    if environment == 'development':
-        email = DEVELOPMENT_EMAIL
-    return client.get_metrics(email, date)
-
-
-def get_participant_metrics_parquet(email: str, date: Optional[str] = None, environment: str = 'development') -> bytes:
-    """
-    Convenience function to get metrics data as parquet bytes.
-    
-    Parameters
-    ----------
-    email : str
-        Participant email address
-    date : str, optional
-        Date in various formats (ISO8601, DD/MM/YYYY, etc.).
-        Defaults to today's date if not provided.
-    environment : str
-        Environment to use ('development' or 'production')
-        
-    Returns
-    -------
-    bytes
-        Parquet file content as bytes
-    """
-    client = UltrahumanAPI(environment=environment)
-    if environment == 'development':
-        email = DEVELOPMENT_EMAIL
-    return client.get_metrics_as_parquet(email, date)
-
-
-def get_participant_metrics_dataframe(email: str, date: Optional[str] = None, environment: str = 'development') -> pd.DataFrame:
-    """
-    Convenience function to get metrics data as pandas DataFrame.
-    
-    Parameters
-    ----------
-    email : str
-        Participant email address
-    date : str, optional
-        Date in various formats (ISO8601, DD/MM/YYYY, etc.).
-        Defaults to today's date if not provided.
-    environment : str
-        Environment to use ('development' or 'production')
-        
-    Returns
-    -------
-    pd.DataFrame
-        DataFrame containing the metrics data
-    """
-    client = UltrahumanAPI(environment=environment)
-    if environment == 'development':
-        email = DEVELOPMENT_EMAIL
-    return client.get_metrics_as_dataframe(email, date)
