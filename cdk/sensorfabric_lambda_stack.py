@@ -248,7 +248,7 @@ class SensorFabricLambdaStack(Stack):
                 architecture=lambda_.Architecture.X86_64,
                 
                 # Dead letter queue for failed executions
-                dead_letter_queue_enabled=True,
+                dead_letter_queue=self.uh_dlq,
                 
                 # Retry configuration
                 retry_attempts=2
@@ -386,3 +386,8 @@ class SensorFabricLambdaStack(Stack):
             publisher_lambda = self.lambda_functions["biobayb_uh_publisher"]
             publisher_lambda.add_environment("UH_SNS_TOPIC_ARN", self.uh_data_collection_topic.topic_arn)
             publisher_lambda.add_environment("UH_DLQ_URL", self.uh_dlq.queue_url)
+
+        # Add DLQ URL to uploader
+        if "biobayb_uh_uploader" in self.lambda_functions:
+            uploader_lambda = self.lambda_functions["biobayb_uh_uploader"]
+            uploader_lambda.add_environment("UH_DLQ_URL", self.uh_dlq.queue_url)
