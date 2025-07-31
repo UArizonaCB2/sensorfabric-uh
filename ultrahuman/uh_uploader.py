@@ -9,6 +9,7 @@ import boto3
 from sensorfabric.mdh import MDH
 from ultrahuman.uh import UltrahumanAPI
 from ultrahuman.utils import flatten_json_to_columns, convert_dict_timestamps, validate_sensor_data_schema
+from ultrahuman.error_handling import handle_api_error, RetryableError, NonRetryableError
 import pandas as pd
 import jsonschema
 import pytz
@@ -95,6 +96,8 @@ class UltrahumanDataUploader:
             
         except Exception as e:
             logger.error(f"Failed to initialize connections: {str(e)}")
+            # Connection initialization failures are typically retryable (network, auth server issues)
+            handle_api_error(e, {'operation': 'connection_initialization'}, 'initialize_connections')
             raise
 
     def _set_target_date(self, target_date: Optional[str] = None):
@@ -182,7 +185,23 @@ class UltrahumanDataUploader:
         record_count = 0
         try:
             # Get DataFrame for this participant and date
-            json_obj = self.uh_api.get_metrics(email, target_date)
+            try:
+                json_obj = self.uh_api.get_metrics(email, target_date)
+            except Exception as e:
+                # Handle UH API errors
+                error_data = {
+                    'participant_id': participant_id,
+                    'email': email,
+                    'target_date': target_date,
+                    'operation': 'uh_api_get_metrics'
+                }
+                handle_api_error(e, error_data, 'uh_api_get_metrics')
+                # If we reach here, it's a non-retryable error that was sent to DLQ
+                return {
+                    'participant_id': participant_id,
+                    'success': False,
+                    'error': f'Non-retryable UH API error: {str(e)}'
+                }
             # we may want to store the raw json file alongside the parquet files.
             # pull out UH keys -
             # response structure is {"data": {"metric_data": [{}]}
@@ -248,10 +267,19 @@ class UltrahumanDataUploader:
                     try:
                         self._update_participant_sync_date(participant_id, timezone)
                     except Exception as e:
-                        logger.warning(f"Failed to update sync date for participant {participant_id}: {str(e)}")
+                        # Handle MDH API errors
+                        error_data = {
+                            'participant_id': participant_id,
+                            'operation': 'mdh_update_sync_date'
+                        }
+                        try:
+                            handle_api_error(e, error_data, 'mdh_update_sync_date')
+                        except RetryableError:
+                            # If it's retryable, re-raise to fail the entire operation
+                            raise
+                        # If non-retryable, log and continue with other participants
+                        logger.warning(f"Non-retryable error updating sync date for participant {participant_id}: {str(e)}")
                         continue
-                        # Don't fail the entire operation if sync date update fails
-                        # but we may want to push into SQS to notify us something is wrong.
 
             logger.debug(f"Successfully uploaded data for participant {participant_id}")
 
@@ -294,7 +322,12 @@ class UltrahumanDataUploader:
         ]
         
         # Use MDH API to update participant
-        self.mdh.update_participants(update_data)
+        try:
+            self.mdh.update_participants(update_data)
+        except Exception as e:
+            # Let the caller handle MDH API errors
+            logger.error(f"MDH API error updating participant {participant_id}: {str(e)}")
+            raise
         
         logger.debug(f"Updated uh_sync_date for participant {participant_id} to {current_timestamp}")
 
@@ -485,6 +518,13 @@ def lambda_handler(event, context):
         logger.info(f"UltraHuman SNS data collection completed")
         logger.debug(f"Result: {json.dumps(result)}")
         return response
+        
+    except RetryableError as e:
+        # Re-raise retryable errors to trigger SNS retry policy
+        error_message = f"Retryable error in UltraHuman uploader: {str(e)}"
+        logger.error(error_message)
+        logger.error(traceback.format_exc())
+        raise e
         
     except Exception as e:
         error_message = f"UltraHuman SNS data collection Lambda failed: {str(e)}"
