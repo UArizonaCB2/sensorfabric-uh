@@ -8,6 +8,7 @@ import boto3
 from botocore.exceptions import ClientError
 
 from sensorfabric.mdh import MDH
+from ultrahuman.error_handling import handle_api_error, RetryableError, NonRetryableError
 
 
 # Configure logging
@@ -73,6 +74,8 @@ class UltrahumanSNSPublisher:
             
         except Exception as e:
             logger.error(f"Failed to initialize MDH connection: {str(e)}")
+            # MDH connection failures are typically retryable
+            handle_api_error(e, {'operation': 'mdh_connection_initialization'}, 'initialize_mdh_connection')
             raise
 
     def _set_target_date(self, target_date: Optional[str] = None):
@@ -108,8 +111,10 @@ class UltrahumanSNSPublisher:
             return active_participants
 
         except Exception as e:
-            # TODO maybe send a message to dead letter queue?
             logger.error(f"Failed to fetch participants: {str(e)}")
+            # Handle MDH API errors
+            error_data = {'operation': 'mdh_get_all_participants'}
+            handle_api_error(e, error_data, 'mdh_get_all_participants')
             raise
 
     def _extract_participant_email(self, participant: Dict[str, Any]) -> Optional[str]:
@@ -187,31 +192,28 @@ class UltrahumanSNSPublisher:
                 'email': email
             }
             
-        except ClientError as e:
+        except Exception as e:
             error_msg = f"Failed to publish SNS message for participant {participant_id}: {str(e)}"
             logger.error(error_msg)
             
-            # Send to dead letter queue if available
-            if self.dead_letter_queue_url:
-                self._send_to_dead_letter_queue(participant, error_msg)
-            
-            return {
+            # Handle SNS publish errors
+            error_data = {
                 'participant_id': participant_id,
-                'success': False,
-                'error': error_msg
+                'participant_data': participant,
+                'operation': 'sns_publish'
             }
-        except Exception as e:
-            error_msg = f"Unexpected error publishing SNS message for participant {participant_id}: {str(e)}"
-            logger.error(error_msg)
             
-            # Send to dead letter queue if available
-            if self.dead_letter_queue_url:
-                self._send_to_dead_letter_queue(participant, error_msg)
+            try:
+                handle_api_error(e, error_data, 'sns_publish')
+            except RetryableError:
+                # Re-raise retryable errors to trigger SNS retry
+                raise
             
+            # Non-retryable error was sent to DLQ, return success to prevent retries
             return {
                 'participant_id': participant_id,
-                'success': False,
-                'error': error_msg
+                'success': True,  # Return success to prevent SNS retries
+                'message': f'Non-retryable error sent to DLQ: {error_msg}'
             }
 
     def _send_to_dead_letter_queue(self, participant: Dict[str, Any], error_message: str):
@@ -407,6 +409,13 @@ def lambda_handler(event, context):
         
         logger.debug(f"UltraHuman SNS Publisher completed: {json.dumps(result)}")
         return response
+        
+    except RetryableError as e:
+        # Re-raise retryable errors to trigger retry mechanism (if publisher is triggered by events)
+        error_message = f"Retryable error in UltraHuman publisher: {str(e)}"
+        logger.error(error_message)
+        logger.error(traceback.format_exc())
+        raise e
         
     except Exception as e:
         error_message = f"UltraHuman SNS Publisher Lambda failed: {str(e)}"

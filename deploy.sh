@@ -7,7 +7,7 @@
 
 # Configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_NAME="sensorfabric-uh"
+# PROJECT_NAME="sensorfabric-uh"  # Currently unused
 ECR_REGISTRY="509812589231.dkr.ecr.us-east-1.amazonaws.com"
 ECR_REPOSITORY="uh-biobayb"
 AWS_REGION="us-east-1"
@@ -39,7 +39,8 @@ discover_lambda_functions() {
     
     # Get all Lambda functions that match our naming pattern
     log_debug "Querying AWS Lambda for functions matching our pattern..."
-    local functions_json=$(aws lambda list-functions \
+    local functions_json
+    functions_json=$(aws lambda list-functions \
         --region "$AWS_REGION" \
         --query 'Functions[?contains(FunctionName, `_biobayb_uh_uploader_Lambda`) || contains(FunctionName, `_biobayb_uh_publisher_Lambda`)].FunctionName' \
         --output json 2>/dev/null || echo "[]")
@@ -158,10 +159,8 @@ log_debug() {
 ecr_login() {
     log_header "Authenticating with ECR..."
     
-    aws ecr get-login-password --region $AWS_REGION | \
-        docker login --username AWS --password-stdin $ECR_REGISTRY
-    
-    if [ $? -eq 0 ]; then
+    if aws ecr get-login-password --region $AWS_REGION | \
+        docker login --username AWS --password-stdin $ECR_REGISTRY; then
         log_info "Successfully authenticated with ECR"
     else
         log_error "Failed to authenticate with ECR"
@@ -207,12 +206,10 @@ build_lambda_image() {
     log_header "Building Docker image for $func_type -> $docker_tag..."
     
     # Build the Docker image
-    docker buildx build --platform linux/amd64 --provenance=false \
+    if docker buildx build --platform linux/amd64 --provenance=false \
         -t "$image_name" \
         -f "$build_context/Dockerfile" \
-        "$build_context"
-    
-    if [ $? -eq 0 ]; then
+        "$build_context"; then
         log_info "Successfully built $image_name"
         
         # Tag with version if available
@@ -234,9 +231,7 @@ push_to_ecr() {
     
     log_header "Pushing image to ECR: $image_name"
     
-    docker push "$image_name"
-    
-    if [ $? -eq 0 ]; then
+    if docker push "$image_name"; then
         log_info "Successfully pushed $image_name to ECR"
         
         # Push versioned image if available
@@ -248,6 +243,91 @@ push_to_ecr() {
     else
         log_error "Failed to push $image_name to ECR"
         exit 1
+    fi
+}
+
+cleanup_old_ecr_images() {
+    log_header "Cleaning up untagged ECR images..."
+    
+    # Get list of untagged images (images with no tags)
+    local untagged_images
+    untagged_images=$(aws ecr describe-images \
+        --repository-name "$ECR_REPOSITORY" \
+        --region "$AWS_REGION" \
+        --query 'imageDetails[?imageTags==null].imageDigest' \
+        --output json 2>/dev/null || echo "[]")
+    
+    if [ "$untagged_images" = "[]" ]; then
+        log_info "No untagged images found in ECR repository"
+        return
+    fi
+    
+    # Count untagged images
+    local image_count=0
+    if command -v jq &> /dev/null; then
+        image_count=$(echo "$untagged_images" | jq length 2>/dev/null || echo 0)
+    else
+        # Fallback count without jq
+        image_count=$(echo "$untagged_images" | grep -o '"sha256:[^"]*"' | wc -l)
+    fi
+    
+    if [ "$image_count" -eq 0 ]; then
+        log_info "No untagged images found for cleanup"
+        return
+    fi
+    
+    log_info "Found $image_count untagged images to delete"
+    
+    # Delete untagged images in batches (AWS limit is 100 per batch)
+    local deleted_count=0
+    local batch_size=100
+    
+    if command -v jq &> /dev/null; then
+        # Process in batches using jq
+        local total_batches=$(( (image_count + batch_size - 1) / batch_size ))
+        
+        for ((batch=0; batch<total_batches; batch++)); do
+            local start_index=$((batch * batch_size))
+            local batch_digests
+            batch_digests=$(echo "$untagged_images" | jq -r ".[$start_index:$((start_index + batch_size))][]" 2>/dev/null)
+            
+            if [ -n "$batch_digests" ]; then
+                # Create image IDs for batch delete
+                local image_ids=""
+                while IFS= read -r digest; do
+                    if [ -n "$digest" ]; then
+                        image_ids="${image_ids}imageDigest=$digest "
+                    fi
+                done <<< "$batch_digests"
+                
+                if [ -n "$image_ids" ]; then
+                    log_info "Deleting batch $((batch + 1))/$total_batches of untagged images..."
+                    
+                    if aws ecr batch-delete-image \
+                        --repository-name "$ECR_REPOSITORY" \
+                        --region "$AWS_REGION" \
+                        --image-ids "$image_ids" \
+                        --output text >/dev/null 2>&1; then
+                        
+                        local batch_count
+                        batch_count=$(echo "$batch_digests" | wc -l)
+                        deleted_count=$((deleted_count + batch_count))
+                        log_info "Successfully deleted $batch_count untagged images in this batch"
+                    else
+                        log_warning "Failed to delete some images in batch $((batch + 1))"
+                    fi
+                fi
+            fi
+        done
+    else
+        log_warning "jq not available, skipping ECR cleanup of untagged images"
+        return
+    fi
+    
+    if [ $deleted_count -gt 0 ]; then
+        log_info "Successfully cleaned up $deleted_count untagged images from ECR"
+    else
+        log_warning "No untagged images were deleted"
     fi
 }
 
@@ -295,7 +375,8 @@ update_lambda_functions() {
             
             # Check if function has aliases and update them
             log_info "Checking for aliases on $aws_func..."
-            local aliases=$(aws lambda list-aliases \
+            local aliases
+            aliases=$(aws lambda list-aliases \
                 --function-name "$aws_func" \
                 --region "$AWS_REGION" \
                 --query 'Aliases[].Name' \
@@ -304,7 +385,8 @@ update_lambda_functions() {
             if [ -n "$aliases" ] && [ "$aliases" != "None" ]; then
                 # Publish a new version from $LATEST
                 log_info "Publishing new version for $aws_func..."
-                local new_version=$(aws lambda publish-version \
+                local new_version
+                new_version=$(aws lambda publish-version \
                     --function-name "$aws_func" \
                     --region "$AWS_REGION" \
                     --query 'Version' \
@@ -355,17 +437,15 @@ deploy_with_cdk() {
     if [ -d "$CDK_DIR" ]; then
         log_header "Deploying infrastructure with CDK..."
         
-        cd "$CDK_DIR"
-        
-        # Install CDK dependencies if needed
-        if [ -f "requirements.txt" ]; then
-            pip install -r requirements.txt
-        fi
-        
-        # Deploy CDK stack
-        cdk deploy --all --require-approval never
-        
-        cd ..
+        (cd "$CDK_DIR" && {
+            # Install CDK dependencies if needed
+            if [ -f "requirements.txt" ]; then
+                pip install -r requirements.txt
+            fi
+            
+            # Deploy CDK stack
+            cdk deploy --all --require-approval never
+        })
         log_info "CDK deployment completed"
     else
         log_warning "CDK directory not found. Skipping CDK deployment."
@@ -392,6 +472,9 @@ build_pipeline() {
         build_lambda_image "$func_type"
         push_to_ecr "$func_type"
     done
+    
+    # Clean up untagged ECR images after all pushes are complete
+    cleanup_old_ecr_images
     
     # Clean up build artifacts
     cleanup_build_artifacts
@@ -459,8 +542,10 @@ validate_prerequisites() {
         log_error "AWS credentials are not configured"
         errors=$((errors + 1))
     else
-        local aws_account=$(aws sts get-caller-identity --query Account --output text)
-        local aws_region=$(aws configure get region)
+        local aws_account
+        local aws_region
+        aws_account=$(aws sts get-caller-identity --query Account --output text)
+        aws_region=$(aws configure get region)
         log_info "AWS Account: $aws_account, Region: $aws_region"
     fi
     
@@ -493,7 +578,8 @@ validate_prerequisites() {
 backup_lambda_functions() {
     log_header "Creating backup of current Lambda functions..."
     
-    local timestamp=$(date +%Y%m%d_%H%M%S)
+    local timestamp
+    timestamp=$(date +%Y%m%d_%H%M%S)
     local stack_suffix=""
     if [ -n "$STACK_FILTER" ]; then
         stack_suffix="_${STACK_FILTER}"
@@ -596,7 +682,8 @@ rollback_deployment() {
         return 1
     fi
     
-    local backup_dir=$(cat "$SCRIPT_DIR/.last_backup")
+    local backup_dir
+    backup_dir=$(cat "$SCRIPT_DIR/.last_backup")
     if [ ! -d "$backup_dir" ]; then
         log_error "Backup directory not found: $backup_dir"
         return 1
@@ -613,7 +700,8 @@ rollback_deployment() {
             log_info "Rolling back $aws_func..."
             
             # Get previous image URI
-            local image_uri=$(jq -r '.Code.ImageUri' "$function_file")
+            local image_uri
+            image_uri=$(jq -r '.Code.ImageUri' "$function_file")
             
             if [ "$image_uri" != "null" ]; then
                 aws lambda update-function-code \
@@ -646,7 +734,8 @@ health_check() {
         log_info "Checking health of $aws_func..."
         
         # Check function state
-        local state=$(aws lambda get-function-configuration \
+        local state
+        state=$(aws lambda get-function-configuration \
             --function-name "$aws_func" \
             --region "$AWS_REGION" \
             --query 'State' \
@@ -660,9 +749,12 @@ health_check() {
         fi
         
         # Check recent errors
-        local error_count=$(aws logs filter-log-events \
+        local error_count
+        local start_time
+        start_time=$(date -d '5 minutes ago' +%s)000
+        error_count=$(aws logs filter-log-events \
             --log-group-name "/aws/lambda/$aws_func" \
-            --start-time $(date -d '5 minutes ago' +%s)000 \
+            --start-time "$start_time" \
             --filter-pattern "ERROR" \
             --region "$AWS_REGION" \
             --query 'length(events)' \
@@ -737,8 +829,6 @@ main() {
     local deployment_method="direct"
     local skip_tests=false
     local action="deploy"
-    local build_only=false
-    local deploy_only=false
     
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -751,12 +841,10 @@ main() {
                 shift
                 ;;
             --build-only)
-                build_only=true
                 action="build-only"
                 shift
                 ;;
             --deploy-only)
-                deploy_only=true
                 action="deploy-only"
                 shift
                 ;;
@@ -859,7 +947,7 @@ EOF
 trap 'log_error "Script failed at line $LINENO"' ERR
 
 # Change to script directory
-cd "$SCRIPT_DIR"
+cd "$SCRIPT_DIR" || exit
 
 # Run main function
 main "$@"
