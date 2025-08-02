@@ -32,6 +32,7 @@ class StackConfig:
     aws_secret_name: str
     sf_data_bucket: str
     uh_environment: str
+    template_mode: str        # PRODUCTION or PRESENT
 
 
 class SensorFabricLambdaStack(Stack):
@@ -66,7 +67,7 @@ class SensorFabricLambdaStack(Stack):
         required_fields = [
             'stack_name', 'environment', 'ecr_registry', 'ecr_repository',
             'project_name', 'database_name', 'sns_topic_name', 'aws_secret_name',
-            'sf_data_bucket', 'uh_environment'
+            'sf_data_bucket', 'uh_environment', 'template_mode'
         ]
         
         for field in required_fields:
@@ -83,6 +84,10 @@ class SensorFabricLambdaStack(Stack):
         if config.environment not in valid_environments:
             raise ValueError(f"Environment '{config.environment}' must be one of: {valid_environments}")
 
+        valid_template_modes = ['PRODUCTION', 'PRESENT']
+        if config.template_mode not in valid_template_modes:
+            raise ValueError(f"Template mode '{config.template_mode}' must be one of: {valid_template_modes}")
+
         # Environment variables:
         # biobayb_uh_publisher: AWS_SECRET_NAME, UH_DLQ_URL, UH_SNS_TOPIC_ARN
         # biobayb_uh_uploader: SF_DATA_BUCKET, UH_ENVIRONMENT, AWS_SECRET_NAME
@@ -92,8 +97,9 @@ class SensorFabricLambdaStack(Stack):
         self.lambda_config = {
             "biobayb_uh_uploader": {
                 "description": "UltraHuman data uploader Lambda function",
+                "handler": "ultrahuman.uh_uploader.lambda_handler",
                 "timeout": Duration.minutes(15),
-                "memory_size": 3008,
+                "memory_size": 3072,
                 "environment": {
                     "UH_ENVIRONMENT": self.config.uh_environment,
                     "SF_DATA_BUCKET": self.config.sf_data_bucket,
@@ -103,11 +109,22 @@ class SensorFabricLambdaStack(Stack):
             },
             "biobayb_uh_publisher": {
                 "description": "UltraHuman SNS publisher Lambda function",
-                "timeout": Duration.minutes(5),
+                "handler": "ultrahuman.uh_publisher.lambda_handler",
+                "timeout": Duration.minutes(10),
                 "memory_size": 2048,
                 "environment": {
                     "AWS_SECRET_NAME": self.config.aws_secret_name,
                     "UH_ENVIRONMENT": self.config.uh_environment
+                }
+            },
+            "biobayb_uh_template_generator": {
+                "description": "UltraHuman weekly report template generator Lambda function",
+                "handler": "ultrahuman.templates.lambda_handler",
+                "timeout": Duration.minutes(10),
+                "memory_size": 2048,
+                "environment": {
+                    "AWS_SECRET_NAME": self.config.aws_secret_name,
+                    "TEMPLATE_MODE": self.config.template_mode
                 }
             }
         }
@@ -229,14 +246,15 @@ class SensorFabricLambdaStack(Stack):
                 removal_policy=RemovalPolicy.RETAIN
             )
 
-            # Create Lambda function
+            # Create Lambda function - all functions use the same "shared" ECR image
             lambda_function = lambda_.DockerImageFunction(
                 self, f"{self.config.project_name}_{function_name}_Lambda",
                 function_name=f"{self.config.project_name}_{function_name}_Lambda",
                 description=config["description"],
                 code=lambda_.DockerImageCode.from_ecr(
                     repository=self.ecr_repo,
-                    tag_or_digest=function_name
+                    tag_or_digest="shared",  # All functions use the same shared image
+                    cmd=[config["handler"]]  # Override the handler via CMD
                 ),
                 role=self.lambda_execution_role,
                 timeout=config["timeout"],
@@ -267,14 +285,21 @@ class SensorFabricLambdaStack(Stack):
         self.update_lambda_environment_variables()
 
     def create_lambda_aliases(self) -> None:
-        """Create Lambda aliases with provisioned concurrency."""
+        """Create Lambda aliases with provisioned concurrency pointing to published versions."""
         
         for function_name, lambda_function in self.lambda_functions.items():
-            # Create alias pointing to $LATEST
+            # Create a published version first
+            version = lambda_.Version(
+                self, f"{self.config.project_name}_{function_name}_Version",
+                lambda_=lambda_function,
+                description=f"Published version for {function_name}"
+            )
+            
+            # Create alias pointing to the published version
             alias = lambda_.Alias(
                 self, f"{self.config.project_name}_{function_name}_Alias",
                 alias_name="LIVE",
-                version=lambda_function.current_version,
+                version=version,
                 provisioned_concurrent_executions=1,
                 description=f"LIVE alias for {function_name} with provisioned concurrency"
             )

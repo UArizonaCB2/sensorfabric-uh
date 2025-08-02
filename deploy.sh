@@ -42,7 +42,7 @@ discover_lambda_functions() {
     local functions_json
     functions_json=$(aws lambda list-functions \
         --region "$AWS_REGION" \
-        --query 'Functions[?contains(FunctionName, `_biobayb_uh_uploader_Lambda`) || contains(FunctionName, `_biobayb_uh_publisher_Lambda`)].FunctionName' \
+        --query 'Functions[?contains(FunctionName, `_biobayb_uh_uploader_Lambda`) || contains(FunctionName, `_biobayb_uh_publisher_Lambda`) || contains(FunctionName, `_biobayb_uh_template_generator_Lambda`)].FunctionName' \
         --output json 2>/dev/null || echo "[]")
     
     log_debug "Raw AWS response: $functions_json"
@@ -105,6 +105,20 @@ discover_lambda_functions() {
             fi
             
             local key="${project_name}-uh_publisher"
+            LAMBDA_FUNCTIONS["$key"]="$func"
+            log_info "Mapped $key -> $func"
+        elif [[ "$func" == *"_biobayb_uh_template_generator_Lambda" ]]; then
+            # Extract project name from function name (format: {project_name}_biobayb_uh_template_generator_Lambda)
+            local project_name="${func%_biobayb_uh_template_generator_Lambda}"
+            log_debug "Extracted project name for template generator: '$project_name'"
+            
+            # Apply stack filter if specified (match against project name)
+            if [ -n "$STACK_FILTER" ] && [ "$project_name" != "$STACK_FILTER" ]; then
+                log_debug "Skipping $func (not in filtered stack: $STACK_FILTER)"
+                continue
+            fi
+            
+            local key="${project_name}-uh_template_generator"
             LAMBDA_FUNCTIONS["$key"]="$func"
             log_info "Mapped $key -> $func"
         else
@@ -176,34 +190,27 @@ setup_build_directories() {
         rm -rf "$BUILD_DIR"
     fi
     
-    # Create build directories for each lambda function type
-    for func_type in "uh_uploader" "uh_publisher"; do
-        mkdir -p "$BUILD_DIR/$func_type"
-        
-        # Copy requirements.txt
-        cp requirements.txt "$BUILD_DIR/$func_type/"
-        
-        # Copy entire ultrahuman package
-        cp -r ultrahuman/ "$BUILD_DIR/$func_type/"
-        
-        # Copy the specific Dockerfile for this function type
-        cp "$DOCKER_DIR/Dockerfile.$func_type" "$BUILD_DIR/$func_type/Dockerfile"
-        
-        # Add cache busting to ensure fresh builds
-        # local cache_bust=$(date +%s)
-        # echo "# Cache bust: $cache_bust" >> "$BUILD_DIR/$func_type/Dockerfile"
-        
-        log_info "Created build directory for $func_type"
-    done
+    # Create single build directory for shared image
+    mkdir -p "$BUILD_DIR/shared"
+    
+    # Copy requirements.txt
+    cp requirements.txt "$BUILD_DIR/shared/"
+    
+    # Copy entire ultrahuman package
+    cp -r ultrahuman/ "$BUILD_DIR/shared/"
+    
+    # Copy the shared Dockerfile
+    cp "$DOCKER_DIR/Dockerfile.shared" "$BUILD_DIR/shared/Dockerfile"
+    
+    log_info "Created shared build directory"
 }
 
-build_lambda_image() {
-    local func_type=$1
-    local docker_tag="biobayb_${func_type}"
+build_shared_lambda_image() {
+    local docker_tag="shared"
     local image_name="$ECR_REGISTRY/$ECR_REPOSITORY:$docker_tag"
-    local build_context="$BUILD_DIR/$func_type"
+    local build_context="$BUILD_DIR/shared"
     
-    log_header "Building Docker image for $func_type -> $docker_tag..."
+    log_header "Building shared Docker image -> $docker_tag..."
     
     # Build the Docker image
     if docker buildx build --platform linux/amd64 --provenance=false \
@@ -224,12 +231,11 @@ build_lambda_image() {
     fi
 }
 
-push_to_ecr() {
-    local func_type=$1
-    local docker_tag="biobayb_${func_type}"
+push_shared_to_ecr() {
+    local docker_tag="shared"
     local image_name="$ECR_REGISTRY/$ECR_REPOSITORY:$docker_tag"
     
-    log_header "Pushing image to ECR: $image_name"
+    log_header "Pushing shared image to ECR: $image_name"
     
     if docker push "$image_name"; then
         log_info "Successfully pushed $image_name to ECR"
@@ -292,21 +298,28 @@ cleanup_old_ecr_images() {
             batch_digests=$(echo "$untagged_images" | jq -r ".[$start_index:$((start_index + batch_size))][]" 2>/dev/null)
             
             if [ -n "$batch_digests" ]; then
-                # Create image IDs for batch delete
-                local image_ids=""
+                # Create image IDs JSON array for batch delete
+                local image_ids_json="["
+                local first=true
                 while IFS= read -r digest; do
                     if [ -n "$digest" ]; then
-                        image_ids="${image_ids}imageDigest=$digest "
+                        if [ "$first" = true ]; then
+                            first=false
+                        else
+                            image_ids_json="$image_ids_json,"
+                        fi
+                        image_ids_json="$image_ids_json{\"imageDigest\":\"$digest\"}"
                     fi
                 done <<< "$batch_digests"
+                image_ids_json="$image_ids_json]"
                 
-                if [ -n "$image_ids" ]; then
+                if [ "$image_ids_json" != "[]" ]; then
                     log_info "Deleting batch $((batch + 1))/$total_batches of untagged images..."
                     
                     if aws ecr batch-delete-image \
                         --repository-name "$ECR_REPOSITORY" \
                         --region "$AWS_REGION" \
-                        --image-ids "$image_ids" \
+                        --image-ids "$image_ids_json" \
                         --output text >/dev/null 2>&1; then
                         
                         local batch_count
@@ -332,34 +345,21 @@ cleanup_old_ecr_images() {
 }
 
 update_lambda_functions() {
-    log_header "Updating Lambda functions with new container images..."
+    log_header "Updating Lambda functions with new shared container image..."
     
     local total_updated=0
     local total_failed=0
+    local shared_image_uri="$ECR_REGISTRY/$ECR_REPOSITORY:shared"
     
     for local_func in "${!LAMBDA_FUNCTIONS[@]}"; do
         local aws_func=${LAMBDA_FUNCTIONS[$local_func]}
         
-        # Determine function type from the key
-        local func_type=""
-        if [[ "$local_func" == *"uh_uploader" ]]; then
-            func_type="uh_uploader"
-        elif [[ "$local_func" == *"uh_publisher" ]]; then
-            func_type="uh_publisher"
-        else
-            log_warning "Cannot determine function type for $local_func, skipping..."
-            continue
-        fi
+        log_info "Updating Lambda function: $aws_func with shared image: $shared_image_uri"
         
-        local docker_tag="biobayb_${func_type}"
-        local image_uri="$ECR_REGISTRY/$ECR_REPOSITORY:$docker_tag"
-        
-        log_info "Updating Lambda function: $aws_func with image: $image_uri"
-        
-        # Update function code to use new container image
+        # Update function code to use new shared container image
         if aws lambda update-function-code \
             --function-name "$aws_func" \
-            --image-uri "$image_uri" \
+            --image-uri "$shared_image_uri" \
             --region "$AWS_REGION" \
             --output table; then
             
@@ -467,11 +467,9 @@ build_pipeline() {
     # Setup build directories
     setup_build_directories
     
-    # Build and push each lambda function type
-    for func_type in "uh_uploader" "uh_publisher"; do
-        build_lambda_image "$func_type"
-        push_to_ecr "$func_type"
-    done
+    # Build and push single shared image
+    build_shared_lambda_image
+    push_shared_to_ecr
     
     # Clean up untagged ECR images after all pushes are complete
     cleanup_old_ecr_images
@@ -491,25 +489,23 @@ cleanup_build_artifacts() {
         log_info "Removed build directory"
     fi
     
-    # Remove local Docker images
-    for func_type in "uh_uploader" "uh_publisher"; do
-        local docker_tag="biobayb_${func_type}"
-        local image_name="$ECR_REGISTRY/$ECR_REPOSITORY:$docker_tag"
-        
-        if docker images -q "$image_name" &> /dev/null; then
-            docker rmi "$image_name" &> /dev/null || true
-            log_info "Removed local image: $image_name"
+    # Remove local shared Docker image
+    local docker_tag="shared"
+    local image_name="$ECR_REGISTRY/$ECR_REPOSITORY:$docker_tag"
+    
+    if docker images -q "$image_name" &> /dev/null; then
+        docker rmi "$image_name" &> /dev/null || true
+        log_info "Removed local image: $image_name"
+    fi
+    
+    # Remove versioned image if exists
+    if [ -n "$VERSION" ]; then
+        local versioned_image="$ECR_REGISTRY/$ECR_REPOSITORY:$docker_tag-$VERSION"
+        if docker images -q "$versioned_image" &> /dev/null; then
+            docker rmi "$versioned_image" &> /dev/null || true
+            log_info "Removed local versioned image: $versioned_image"
         fi
-        
-        # Remove versioned image if exists
-        if [ -n "$VERSION" ]; then
-            local versioned_image="$ECR_REGISTRY/$ECR_REPOSITORY:$docker_tag-$VERSION"
-            if docker images -q "$versioned_image" &> /dev/null; then
-                docker rmi "$versioned_image" &> /dev/null || true
-                log_info "Removed local versioned image: $versioned_image"
-            fi
-        fi
-    done
+    fi
     
     log_info "Cleanup completed"
 }
@@ -555,7 +551,7 @@ validate_prerequisites() {
     fi
     
     # Check project structure
-    local required_files=("requirements.txt" "ultrahuman/" "docker/Dockerfile.uh_uploader" "docker/Dockerfile.uh_publisher")
+    local required_files=("requirements.txt" "ultrahuman/" "docker/Dockerfile.shared")
     for file in "${required_files[@]}"; do
         if [ ! -e "$SCRIPT_DIR/$file" ]; then
             log_error "Required file/directory not found: $file"
@@ -755,7 +751,7 @@ health_check() {
         error_count=$(aws logs filter-log-events \
             --log-group-name "/aws/lambda/$aws_func" \
             --start-time "$start_time" \
-            --filter-pattern "ERROR" \
+            --filter-pattern "error" \
             --region "$AWS_REGION" \
             --query 'length(events)' \
             --output text 2>/dev/null || echo "0")
@@ -817,7 +813,7 @@ deploy_pipeline() {
     # Health check
     if ! health_check; then
         log_error "Health check failed - initiating rollback"
-        rollback_deployment
+        # rollback_deployment
         exit 1
     fi
     

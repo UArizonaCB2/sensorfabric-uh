@@ -20,7 +20,8 @@ config = StackConfig(
     sns_topic_name=app.node.try_get_context("sns_topic_name") or "mdh_uh_sync",
     aws_secret_name=app.node.try_get_context("aws_secret_name") or "prod/biobayb/uh/keys",
     sf_data_bucket=app.node.try_get_context("sf_data_bucket") or "uoa-biobayb-uh-dev",
-    uh_environment=app.node.try_get_context("uh_environment") or "production"
+    uh_environment=app.node.try_get_context("uh_environment") or "production",
+    template_mode=app.node.try_get_context("template_mode") or "PRESENT"
 )
 
 prodConfig = StackConfig(
@@ -33,7 +34,8 @@ prodConfig = StackConfig(
     sns_topic_name="mdh_uh_sync_prod",
     aws_secret_name="prod/biobayb/uh-prod/prod-keys",
     sf_data_bucket="uoa-biobayb-uh-prod",
-    uh_environment="production"
+    uh_environment="production",
+    template_mode="PRODUCTION"
 )
 
 # TODO: add other stacks.

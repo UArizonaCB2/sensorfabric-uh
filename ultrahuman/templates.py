@@ -1,8 +1,16 @@
 from jinja2 import Template
 from datetime import datetime
 from typing import Dict, List, Any, Optional
+import json
+import logging
+import os
+import base64
+import boto3
+from botocore.exceptions import ClientError
 from sensorfabric.mdh import MDH
+from ultrahuman.helper import Helper
 
+logger = logging.getLogger(__name__)
 
 class TemplateGenerator:
     """
@@ -15,6 +23,7 @@ class TemplateGenerator:
     """
     
     def __init__(self, config: Dict[str, Any], **kwargs):
+        self.__config = config
         self.mdh = None
 
     def _initialize_connections(self):
@@ -35,6 +44,7 @@ class TemplateGenerator:
 
 
     def generate_weekly_report_template(
+        self,
         participant_id: str,
         target_week: Optional[str] = None,
     ) -> str:
@@ -43,7 +53,7 @@ class TemplateGenerator:
         
         Args:
             participant_id: ID of the participant to generate the report for
-            target_week: Optional week to generate the report for
+            target_week: Optional week to generate the report for - this is the END week, inclusive.
 
         Returns:
             HTML string with populated template
@@ -54,72 +64,78 @@ class TemplateGenerator:
         # initialize connections if not already done
         if self.mdh is None:
             self._initialize_connections()
-        # TODO awswrangler.
-        # TODO pull data and compute on the fly from participant id.
-        # weeks enrolled comes from MDH participant record
-        participant = self.mdh.getParticipant(participant_id)
+
+        # participant = self.mdh.getParticipant(participant_id)
         if target_week is None:
-            last_week_utc_timestamp = datetime.datetime.now() - datetime.timedelta(days=7)
-            last_week_utc_timestamp_int = int(last_week_utc_timestamp.timestamp())
+            last_week_utc_timestamp = datetime.now()
         else:
             # TODO make target_week processing more robust.
             # TODO need to use participant's timezone? not sure.
-            last_week_utc_timestamp = datetime.datetime.strptime(target_week, '%Y-%m-%d') - datetime.timedelta(days=7)
-            last_week_utc_timestamp_int = int(last_week_utc_timestamp.timestamp())
-        # current_pregnancy_week = math.floor(ga_calculated_today_days / 7)
-        # enrolled_date
-        # MDH task API:
-        # total_surveys = 
-        # surveys_completed = 
+            last_week_utc_timestamp = datetime.strptime(target_week, '%Y-%m-%d')
 
-        # MDH athena SQL:
-        # bp_count
-        # -
-        # bp_trend
-        # -
-        # bp_high_readings
-        # -
+        helper = Helper(mdh=self.mdh, participant_id=participant_id, end_date=last_week_utc_timestamp)
 
-        # TODO get mdh participant-based states
-        # uh data from s3/athena based data - SQL queries:
-        # awsrangler here pointing to correct path.
-        # ring_wear_percentage
-        # - 
-        # heart_rate_total_beats
-        # - SELECT COUNT(*)
-        #   FROM hr
-        #   WHERE pid = <participant_id>
-        #     AND object_values_timestamp >= <last_week_utc_timestamp>;
+        #     return {
+        #         # Percentage of ring wear time during the week.
+        #         'ring_wear_percent': 97,
+        #     }
 
-        # heart_rate_avg_resting
-        # - SELECT avg(object_values_value)
-        #   FROM hr
-        #   WHERE pid = <participant_id>
-        #     AND object_values_timestamp >= <last_week_utc_timestamp>;
+        # elif calling_function_name == 'bloodPressure':
+        #     return {
+        #         'counts': 6,
+        #         'above_threshold_counts': 2,
+        #         'trend': trends[random.randint(0, len(trends)-1)],
+        #     }
 
-        # temperature_total_readings
-        # - SELECT COUNT(*)
-        #   FROM temp
-        #   WHERE pid = <participant_id>
-        #     AND object_values_timestamp >= <last_week_utc_timestamp>;
-        # temperature_fever_readings
-        # - SELECT COUNT(*)
-        #   FROM temp
-        #   WHERE pid = <participant_id>
-        #     AND object_values_timestamp >= <last_week_utc_timestamp>
-        #     AND object_values_value >= FEVER_THRESHOLD;
-        # sleep_total_hours
-        # -
-        # sleep_avg_per_night
-        # -
-        # weight_weekly_change
-        # -
-        # weight_total_change
-        # -
-        # movement_total_minutes
-        # -
-        # movement_avg_steps_per_day
-        # -
+        # elif calling_function_name == 'heartRateSummary':
+        #     return {
+        #         'hr_counts': 12001600,
+        #         'avg_rhr': 62,
+        #     }
+
+        # elif calling_function_name == 'temperatureSummary':
+        #     return {
+        #         'counts': 12103,
+        #         'above_threshold_counts': 3,
+        #         'trend': trends[random.randint(0, len(trends)-1)],
+        #     }
+
+        # elif calling_function_name == 'sleepSummary':
+        #     return {
+        #         'hours': 60,
+        #         'average_per_night': 6.4,
+        #     }
+
+        # elif calling_function_name == 'weightSummary':
+        #     return {
+        #         # Can return both positive or negative values.
+        #         'change_in_weight': random.randint(0, 10) - 5,
+        #     }
+
+        # elif calling_function_name == 'movementSummary':
+        #     return {
+        #         'total_movements_mins': 120,
+        #         'average_steps_int': 4200,
+        #         # Trend can return a positive or negative value.
+        #         'trend': 5000 - random.randint(4500, 5500),
+        #     }
+
+        # elif calling_function_name == 'topSymptomsRecorded':
+        #     return ['Headaches', 'Indigestion', 'Nausea']
+
+        
+        ringwear = helper.ringWearTime()
+        weight = helper.weightSummary()
+        movement = helper.movementSummary()
+        symptoms = helper.topSymptomsRecorded()
+        sleep = helper.sleepSummary()
+        temp = helper.temperatureSummary()
+        hr = helper.heartRateSummary()
+        bp = helper.bloodPressure()
+        weeks_enrolled = helper.weeksEnrolled()
+        ga_weeks = helper.weeksPregnant()
+        ema_count = helper.emaCompleted()
+        enrolled_date = helper.enrolledDate()
         template_str = """
         <!DOCTYPE html>
         <html>
@@ -149,7 +165,11 @@ class TemplateGenerator:
             </div>
             
             <div class="metric">
-                <strong>Survey Completion:</strong> {{ surveys_completed }} of {{ total_surveys }} surveys completed
+                <strong>Top Symptoms:</strong> {{ ', '.join(symptoms) }}
+            </div>
+
+            <div class="metric">
+                <strong>Survey Completion:</strong> {{ surveys_completed }} completed surveys.
             </div>
             
             {% if blood_pressure_enabled %}
@@ -169,10 +189,10 @@ class TemplateGenerator:
             
             {% if temperature_enabled %}
             <div class="metric">
-                <strong>Temperature:</strong> Total temperature readings = {{ temperature_total_readings }}. 
-                Trending = {{ metrics.temperature.trend }}
+                <strong>Temperature:</strong> Total temperature readings = {{ temp_count }}. 
+                Trending = {{ temp_trend }}
                 <br>
-                {{ temperature_fever_readings or "No" }} temperatures over 100.0°F recorded
+                {{ temp_high_readings or "No" }} temperatures over 100.0°F recorded
             </div>
             {% endif %}
             
@@ -185,8 +205,7 @@ class TemplateGenerator:
             
             {% if weight_enabled %}
             <div class="metric">
-                <strong>Weight:</strong> Change in weight this week = {{ weight_weekly_change }} lbs. 
-                Total change {{ weight_total_change }} lbs since {{ enrolled_date }}
+                <strong>Weight:</strong> Change in weight = {{ weight_change }} lbs since {{ enrolled_date }}
             </div>
             {% endif %}
             
@@ -211,19 +230,25 @@ class TemplateGenerator:
         
         return template.render(
             weeks_enrolled=weeks_enrolled,
-            current_pregnancy_week=current_pregnancy_week,
-            ring_wear_percentage=ring_wear_percentage,
-            surveys_completed=surveys_completed,
-            total_surveys=total_surveys,
-            bp_count=bp_count,
-            bp_trend=bp_trend,
-            bp_high_readings=bp_high_readings,
+            current_pregnancy_week=ga_weeks,
+            ring_wear_percentage=ringwear['ring_wear_percent'],
+            surveys_completed=ema_count,
+            symptoms=symptoms,
+            bp_count=bp['counts'],
+            bp_trend=bp['trend'],
+            bp_high_readings=bp['above_threshold_counts'],
+            temp_count=temp['counts'],
+            temp_trend=temp['trend'],
+            temp_high_readings=temp['above_threshold_counts'],
+            heart_rate_total_beats=hr['hr_counts'],
+            heart_rate_avg_resting=hr['avg_rhr'],
             enrolled_date=enrolled_date,
-            sleep_total_hours=sleep_total_hours,
-            sleep_avg_per_night=sleep_avg_per_night,
-            movement_total_minutes=movement_total_minutes,
-            movement_avg_steps_per_day=movement_avg_steps_per_day,
-            movement_step_trend=movement_step_trend,
+            sleep_total_hours=sleep['hours'],
+            sleep_avg_per_night=sleep['average_per_night'],
+            movement_total_minutes=movement['total_movements_mins'],
+            movement_avg_steps_per_day=movement['average_steps_int'],
+            movement_step_trend=movement['trend'],
+            weight_change=weight['change_in_weight'],
             # enabled flags
             blood_pressure_enabled=True,
             heart_rate_enabled=True,
@@ -233,3 +258,108 @@ class TemplateGenerator:
             movement_enabled=True,
             report_date=datetime.now().strftime("%Y-%m-%d %H:%M")
         )
+
+
+def get_secret():
+    """
+    Uses secretmanager to fill in MDH secrets
+    """
+    secret_name = os.getenv("AWS_SECRET_NAME")
+    region_name = os.getenv("AWS_REGION", "us-east-1")
+    
+    # Create a Secrets Manager client
+    session = boto3.session.Session()
+    client = session.client(
+        service_name='secretsmanager',
+        region_name=region_name
+    )
+    
+    try:
+        get_secret_value_response = client.get_secret_value(SecretId=secret_name)
+    except ClientError as e:
+        if e.response['Error']['Code'] == 'ResourceNotFoundException':
+            logger.error("The requested secret " + secret_name + " was not found")
+        elif e.response['Error']['Code'] == 'InvalidRequestException':
+            logger.error("The request was invalid due to: " + e.response['Error']['Message'])
+        elif e.response['Error']['Code'] == 'InvalidParameterException':
+            logger.error("The request had invalid params - " + e.response['Error']['Message'])
+        elif e.response['Error']['Code'] == 'DecryptionFailure':
+            logger.error("The requested secret can't be decrypted using the provided KMS key - " + e.response['Error']['Message'])
+        elif e.response['Error']['Code'] == 'InternalServiceError':
+            logger.error("The request was not processed because of an internal error. - " + e.response['Error']['Message'])
+        raise e
+    else:
+        if 'SecretString' in get_secret_value_response:
+            secret = get_secret_value_response['SecretString']
+            return json.loads(secret)
+        else:
+            decoded_binary_secret = base64.b64decode(get_secret_value_response['SecretBinary'])
+            return json.loads(decoded_binary_secret)
+
+
+def lambda_handler(event, context):
+    """
+    AWS Lambda handler for generating weekly health reports.
+    
+    Expected event format:
+    {
+        "participant_id": "<mdh_id>",
+        "target_date": Optional[str]  # YYYY-MM-DD format
+    }
+    
+    Returns:
+    {
+        "statusCode": 200,
+        "body": "<HTML content>"
+    }
+    """
+    logger.debug(f"Template Generator Lambda started with event: {json.dumps(event)}")
+
+    try:
+        # Setup environment with secrets
+        secrets = get_secret()
+        
+        # Extract parameters from event
+        participant_id = event.get('participant_id')
+        target_date = event.get('target_date')
+        
+        if not participant_id:
+            return {
+                'statusCode': 400,
+                'body': json.dumps({'error': 'participant_id is required'})
+            }
+        
+        # Initialize template generator
+        generator = TemplateGenerator(secrets)
+        
+        # Generate the report
+        html_report = generator.generate_weekly_report_template(
+            participant_id=participant_id,
+            target_week=target_date
+        )
+        
+        logger.debug(f"Template generation completed for participant {participant_id}")
+        
+        return {
+            'statusCode': 200,
+            'headers': {
+                'Content-Type': 'text/html'
+            },
+            'body': html_report
+        }
+        
+    except Exception as e:
+        error_message = f"Template Generator Lambda failed: {str(e)}"
+        logger.error(error_message)
+        return {
+            'statusCode': 500,
+            'body': json.dumps({
+                'success': False,
+                'error': str(e),
+                'message': 'Template generation failed'
+            }),
+            'headers': {
+                'Content-Type': 'application/json'
+            }
+        }
+

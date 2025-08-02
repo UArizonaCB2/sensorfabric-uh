@@ -3,7 +3,7 @@ FROM public.ecr.aws/lambda/python:3.13
 
 # Set labels for better container management
 LABEL maintainer="University of Arizona CB2"
-LABEL description="UltraHuman Lambda container for Sensorfabric/UltraHuman data processing - Publisher"
+LABEL description="UltraHuman Lambda container for Sensorfabric/UltraHuman data processing - Shared"
 LABEL version="3.2.3"
 
 # Install system dependencies if needed
@@ -35,5 +35,4 @@ ENV PYTHONPATH=${LAMBDA_TASK_ROOT}
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 
-# Set the Lambda handler for the publisher function
-CMD [ "ultrahuman.uh_publisher.lambda_handler" ]
+# No default CMD - handler will be specified by Lambda configuration

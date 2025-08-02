@@ -45,6 +45,16 @@ class Helper:
         if not self.participant['enrolled']:
             raise ParticipantNotEnrolled('Participant is not yet enrolled in the study')
 
+    def enrolledDate(self) -> date:
+        """
+        Returns the enrollment date of the participant.
+        """
+        date_str = self.participant['enrollmentDate']
+        if type(date_str) == str:
+            return datetime.fromisoformat(date_str).date()
+        else:
+            return date_str
+
     def getParticipant(self) -> dict:
         """Returns the MDH participant dictionary"""
         return self.participant
