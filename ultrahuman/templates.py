@@ -1,4 +1,4 @@
-from jinja2 import Template
+from jinja2 import Environment, FileSystemLoader
 from datetime import datetime
 from typing import Dict, List, Any, Optional
 import json
@@ -8,7 +8,8 @@ import base64
 import boto3
 from botocore.exceptions import ClientError
 from sensorfabric.mdh import MDH
-from ultrahuman.helper import Helper
+from helper import Helper
+import traceback
 
 logger = logging.getLogger(__name__)
 
@@ -75,55 +76,6 @@ class TemplateGenerator:
 
         helper = Helper(mdh=self.mdh, participant_id=participant_id, end_date=last_week_utc_timestamp)
 
-        #     return {
-        #         # Percentage of ring wear time during the week.
-        #         'ring_wear_percent': 97,
-        #     }
-
-        # elif calling_function_name == 'bloodPressure':
-        #     return {
-        #         'counts': 6,
-        #         'above_threshold_counts': 2,
-        #         'trend': trends[random.randint(0, len(trends)-1)],
-        #     }
-
-        # elif calling_function_name == 'heartRateSummary':
-        #     return {
-        #         'hr_counts': 12001600,
-        #         'avg_rhr': 62,
-        #     }
-
-        # elif calling_function_name == 'temperatureSummary':
-        #     return {
-        #         'counts': 12103,
-        #         'above_threshold_counts': 3,
-        #         'trend': trends[random.randint(0, len(trends)-1)],
-        #     }
-
-        # elif calling_function_name == 'sleepSummary':
-        #     return {
-        #         'hours': 60,
-        #         'average_per_night': 6.4,
-        #     }
-
-        # elif calling_function_name == 'weightSummary':
-        #     return {
-        #         # Can return both positive or negative values.
-        #         'change_in_weight': random.randint(0, 10) - 5,
-        #     }
-
-        # elif calling_function_name == 'movementSummary':
-        #     return {
-        #         'total_movements_mins': 120,
-        #         'average_steps_int': 4200,
-        #         # Trend can return a positive or negative value.
-        #         'trend': 5000 - random.randint(4500, 5500),
-        #     }
-
-        # elif calling_function_name == 'topSymptomsRecorded':
-        #     return ['Headaches', 'Indigestion', 'Nausea']
-
-        
         ringwear = helper.ringWearTime()
         weight = helper.weightSummary()
         movement = helper.movementSummary()
@@ -136,99 +88,11 @@ class TemplateGenerator:
         ga_weeks = helper.weeksPregnant()
         ema_count = helper.emaCompleted()
         enrolled_date = helper.enrolledDate()
-        template_str = """
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>Weekly Health Report</title>
-            <style>
-                body { font-family: Arial, sans-serif; margin: 20px; }
-                .metric { margin: 10px 0; padding: 10px; background-color: #f5f5f5; border-radius: 5px; }
-                .trend-positive { color: green; }
-                .trend-negative { color: red; }
-                .trend-neutral { color: #666; }
-            </style>
-        </head>
-        <body>
-            <h1>Weekly Health Report</h1>
-            
-            <div class="metric">
-                <strong>Enrollment Status:</strong> {{ weeks_enrolled }} weeks enrolled
-            </div>
-            
-            <div class="metric">
-                <strong>Pregnancy Progress:</strong> {{ current_pregnancy_week }} weeks - {{ current_pregnancy_week + 1 }} weeks pregnant
-            </div>
-            
-            <div class="metric">
-                <strong>Device Usage:</strong> {{ ring_wear_percentage }}% ring wear time
-            </div>
-            
-            <div class="metric">
-                <strong>Top Symptoms:</strong> {{ ', '.join(symptoms) }}
-            </div>
 
-            <div class="metric">
-                <strong>Survey Completion:</strong> {{ surveys_completed }} completed surveys.
-            </div>
-            
-            {% if blood_pressure_enabled %}
-            <div class="metric">
-                <strong>Blood Pressure:</strong> You recorded {{ bp_count }} blood pressures this week. 
-                Blood pressure trend: {{ bp_trend }} as last week. 
-                Number of blood pressures over 140/90 = {{ bp_high_readings or "none" }}
-            </div>
-            {% endif %}
-            
-            {% if heart_rate_enabled %}
-            <div class="metric">
-                <strong>Heart Rate:</strong> {{ heart_rate_total_beats }} heart beats recorded. 
-                Average resting heart rate of {{ heart_rate_avg_resting }}
-            </div>
-            {% endif %}
-            
-            {% if temperature_enabled %}
-            <div class="metric">
-                <strong>Temperature:</strong> Total temperature readings = {{ temp_count }}. 
-                Trending = {{ temp_trend }}
-                <br>
-                {{ temp_high_readings or "No" }} temperatures over 100.0°F recorded
-            </div>
-            {% endif %}
-            
-            {% if sleep_enabled %}
-            <div class="metric">
-                <strong>Sleep:</strong> {{ sleep_total_hours }} hours of sleep this week. 
-                Average {{ sleep_avg_per_night }} per night.
-            </div>
-            {% endif %}
-            
-            {% if weight_enabled %}
-            <div class="metric">
-                <strong>Weight:</strong> Change in weight = {{ weight_change }} lbs since {{ enrolled_date }}
-            </div>
-            {% endif %}
-            
-            {% if movement_enabled %}
-            <div class="metric">
-                <strong>Movement:</strong> Total movement this week = {{ movement_total_minutes }} minutes. 
-                Average steps per day = {{ movement_avg_steps_per_day }}
-                <br>
-                Trend - {{ movement_step_trend }} 
-                {{ "fewer" if movement_step_trend < 0 else "more" }} than last week
-            </div>
-            {% endif %}
-            
-            <div class="metric">
-                <small>Report generated on {{ report_date }}</small>
-            </div>
-        </body>
-        </html>
-        """
-        
-        template = Template(template_str)
-        
-        return template.render(
+        env = Environment(loader=FileSystemLoader('templates'))
+        template = env.get_template('reportv2.html')
+
+        data = dict(
             weeks_enrolled=weeks_enrolled,
             current_pregnancy_week=ga_weeks,
             ring_wear_percentage=ringwear['ring_wear_percent'],
@@ -259,6 +123,9 @@ class TemplateGenerator:
             report_date=datetime.now().strftime("%Y-%m-%d %H:%M")
         )
 
+        html = template.render(data)
+
+        return html
 
 def get_secret():
     """
@@ -266,7 +133,8 @@ def get_secret():
     """
     secret_name = os.getenv("AWS_SECRET_NAME")
     region_name = os.getenv("AWS_REGION", "us-east-1")
-    
+    logger.debug(f"Env Variables - {secret_name} {region_name}")
+
     # Create a Secrets Manager client
     session = boto3.session.Session()
     client = session.client(
@@ -318,11 +186,11 @@ def lambda_handler(event, context):
     try:
         # Setup environment with secrets
         secrets = get_secret()
-        
+
         # Extract parameters from event
         participant_id = event.get('participant_id')
         target_date = event.get('target_date')
-        
+
         if not participant_id:
             return {
                 'statusCode': 400,
@@ -331,13 +199,13 @@ def lambda_handler(event, context):
         
         # Initialize template generator
         generator = TemplateGenerator(secrets)
-        
+
         # Generate the report
         html_report = generator.generate_weekly_report_template(
             participant_id=participant_id,
             target_week=target_date
         )
-        
+
         logger.debug(f"Template generation completed for participant {participant_id}")
         
         return {
