@@ -181,7 +181,14 @@ class UltrahumanDataUploader:
         if not email:
             logger.warning(f"No email found for participant {participant_id}")
             return {'participant_id': participant_id, 'success': False, 'error': 'No email found'}
-        
+        # new uh_sync_timestamp for athena syncing
+        uh_sync_timestamp = participant.get('uh_sync_timestamp', None)
+        if uh_sync_timestamp is not None:
+            uh_sync_timestamp = int(datetime.datetime.fromisoformat(uh_sync_timestamp).timestamp())
+            logger.debug(f"Found uh_sync_timestamp: {uh_sync_timestamp}")
+        else:
+            logger.debug("No uh_sync_timestamp found")
+
         record_count = 0
         try:
             # Get DataFrame for this participant and date
@@ -213,6 +220,7 @@ class UltrahumanDataUploader:
                     'error': 'No data found'
                 }
             metrics_data = data.get('metric_data', [])
+            last_uh_timestamp = 0
             for metric in metrics_data:
                 metric_type = metric.get('type') if type(metric) == dict else None
                 if type(metric) == dict and 'object_values' in metric and len(metric['object_values']) <= 0:
@@ -223,25 +231,18 @@ class UltrahumanDataUploader:
                 # logger.debug(f"Flattened data: {flattened}")
                 logger.debug(f"Converted data: {converted}")
                 # logger.debug(f"Metric type: {metric_type}")
-                try:
-                    obj_values_value = converted.get('object_values_value', None)
-                    # if any of these are None, then we have empty data.
-                    if obj_values_value is None:
-                        logger.debug(f"Empty sensor data for participant {participant_id}, metric {metric_type}")
-                        continue
-
-                    validate_sensor_data_schema(converted)
-                except jsonschema.ValidationError as e:
-                    logger.debug(f"Sensor data validation failed for participant {participant_id}, metric {metric_type}: {e.message}")
-                    # not even sure we should be doing schema validation here, as long as
-                    # the ultrahuman API is stable.
-                    # this tends to be a false positive.
-                    continue
                 # push data into dataframe and then s3 through the wrangler.
                 df = pd.DataFrame.from_dict(converted, orient="columns")
                 if df.empty:
+                    logger.info(f"Empty sensor data: {metric_type}")
                     continue
                 else:
+                    new_uh_timestamp = df['object_values_timestamp'].max()
+                    if new_uh_timestamp > last_uh_timestamp:
+                        last_uh_timestamp = new_uh_timestamp
+                    if uh_sync_timestamp is not None:
+                        df = df[df['object_values_timestamp'] > uh_sync_timestamp]
+                        logger.debug("Removed old timestamp values")
                     wr.s3.to_parquet(
                         df=df,
                         path=f"s3://{self.data_bucket}/raw/dataset/{metric_type}",
@@ -263,26 +264,11 @@ class UltrahumanDataUploader:
                         mode='append',
                     )
                     record_count += len(df)
-                    # Update participant's sync date in MDH
-                    try:
-                        self._update_participant_sync_date(participant_id, timezone)
-                    except Exception as e:
-                        # Handle MDH API errors
-                        error_data = {
-                            'participant_id': participant_id,
-                            'operation': 'mdh_update_sync_date'
-                        }
-                        try:
-                            handle_api_error(e, error_data, 'mdh_update_sync_date')
-                        except RetryableError:
-                            # If it's retryable, re-raise to fail the entire operation
-                            raise
-                        # If non-retryable, log and continue with other participants
-                        logger.warning(f"Non-retryable error updating sync date for participant {participant_id}: {str(e)}")
-                        continue
 
             logger.debug(f"Successfully uploaded data for participant {participant_id}")
-
+            if record_count > 0:
+                # Update participant's sync date in MDH
+                self._update_participant_sync_date(participant_id, last_uh_timestamp)
             return {
                 'participant_id': participant_id,
                 'success': True,
@@ -297,7 +283,7 @@ class UltrahumanDataUploader:
                 'error': str(e)
             }
 
-    def _update_participant_sync_date(self, participant_id: str, timezone: str = DEFAULT_TIMEZONE) -> None:
+    def _update_participant_sync_date(self, participant_id: str, last_sync_timestamp: int) -> None:
         """Update participant's uh_sync_date field in MDH.
         
         Args:
@@ -307,15 +293,17 @@ class UltrahumanDataUploader:
             Exception: If update fails
         """
         # Generate current ISO8601 timestamp
-        tz = pytz.timezone(timezone)
-        current_timestamp = datetime.datetime.now(tz).strftime('%m/%d/%Y')
+        if last_sync_timestamp == 0 or last_sync_timestamp is None:
+            logger.debug(f'No uh_sync_timestamp found for participant_id: {participant_id}: last_sync_timestamp: {last_sync_timestamp}')
+            return
+        last_uh_date = datetime.datetime.fromtimestamp(last_sync_timestamp, datetime.timezone.utc).isoformat()
 
         # Update participant's custom field
         update_data = [
             {
                 participant_id : {
                     'customFields': {
-                        'uh_sync_date': current_timestamp
+                        'uh_sync_timestamp': last_uh_date
                     }
                 }
             }
@@ -325,11 +313,9 @@ class UltrahumanDataUploader:
         try:
             self.mdh.update_participants(update_data)
         except Exception as e:
-            # Let the caller handle MDH API errors
-            logger.error(f"MDH API error updating participant {participant_id}: {str(e)}")
-            raise
-        
-        logger.debug(f"Updated uh_sync_date for participant {participant_id} to {current_timestamp}")
+            handle_api_error(e, {'operation': 'mdh_update_participants'}, 'update_participant_sync_date')
+
+        logger.debug(f"Updated uh_sync_date for participant {participant_id} to {now.isoformat()}")
 
     def process_sns_messages(self, sns_records: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
