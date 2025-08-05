@@ -361,7 +361,8 @@ update_lambda_functions() {
             --function-name "$aws_func" \
             --image-uri "$shared_image_uri" \
             --region "$AWS_REGION" \
-            --output table; then
+            --no-cli-pager \
+            --output json > /dev/null; then
             
             log_info "Successfully updated Lambda function $aws_func"
             
@@ -402,7 +403,8 @@ update_lambda_functions() {
                             --name "$alias" \
                             --function-version "$new_version" \
                             --region "$AWS_REGION" \
-                            --output table; then
+                            --no-cli-pager \
+                            --output json > /dev/null; then
                             log_info "Successfully updated alias '$alias' for $aws_func"
                         else
                             log_warning "Failed to update alias '$alias' for $aws_func"
@@ -704,7 +706,8 @@ rollback_deployment() {
                     --function-name "$aws_func" \
                     --image-uri "$image_uri" \
                     --region "$AWS_REGION" \
-                    --output table
+                    --no-cli-pager \
+                    --output json > /dev/null
                 
                 log_info "Rolled back $aws_func to previous version"
             else
