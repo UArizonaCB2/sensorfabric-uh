@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Your Weekly Report</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+        /* General Body Styles */
+        :root {
+            --bg-color: #f0f4f8;
+            --text-color: #333;
+            --card-bg: #f8fafc;
+            --card-border: #e2e8f0;
+            --container-bg: #ffffff;
+            --heading-color: #374151;
+            --primary-metric-color: #1e293b;
+            --secondary-text-color: #475569;
+            --symptoms-highlight-bg: #f1f5f9;
+        }
+
+        body.dark-theme {
+            --bg-color: #111827;
+            --text-color: #d1d5db;
+            --card-bg: #374151;
+            --card-border: #4b5563;
+            --container-bg: #1f2937;
+            --heading-color: #d1d5db;
+            --primary-metric-color: #ffffff;
+            --secondary-text-color: #9ca3af;
+            --symptoms-highlight-bg: #4b5563;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            margin: 0;
+            padding: 2rem 1rem;
+            display: flex;
+            flex-direction: column; /* Stack container and switcher */
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            transition: background-color 0.3s ease, color 0.3s ease;
+        }
+
+        /* Main Container */
+        .main-container {
+            width: 100%;
+            max-width: 1024px;
+            min-width: 600px;
+            background-color: var(--container-bg);
+            border-radius: 24px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.07);
+            padding: 2.5rem;
+            box-sizing: border-box;
+            position: relative;
+            transition: background-color 0.3s ease;
+        }
+
+        /* Grid layout for report content */
+        .report-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 1.5rem;
+        }
+
+        /* Animation Keyframes */
+        @keyframes fadeInGraceful {
+            from {
+                opacity: 0;
+                transform: translateY(15px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.15); }
+        }
+
+        @keyframes rock {
+            0%, 100% { transform: rotate(-8deg); }
+            50% { transform: rotate(8deg); }
+        }
+
+        @keyframes jiggle {
+            0%, 100% { transform: rotate(0); }
+            25% { transform: rotate(-5deg); }
+            75% { transform: rotate(5deg); }
+        }
+
+        @keyframes bounce {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-8px); }
+        }
+
+
+        /* Reusable Report Card Component */
+        .report-card {
+            display: flex;
+            flex-direction: column;
+            background-color: var(--card-bg);
+            border: 1px solid var(--card-border);
+            border-radius: 16px;
+            padding: 1.5rem;
+            /* Animation Properties */
+            opacity: 0; /* Start hidden for the animation */
+            animation: fadeInGraceful 0.6s ease-out forwards;
+            transition: transform 0.4s ease-out, box-shadow 0.4s ease-out, background-color 0.3s ease, border-color 0.3s ease;
+        }
+
+        /* Stagger the animation delay for each card in the grid */
+        .report-grid > .report-card:nth-child(1) { animation-delay: 0.1s; }
+        .report-grid > .report-card:nth-child(2) { animation-delay: 0.2s; }
+        .report-grid > .report-card:nth-child(3) { animation-delay: 0.3s; }
+        .report-grid > .report-card:nth-child(4) { animation-delay: 0.4s; }
+        .report-grid > .report-card:nth-child(5) { animation-delay: 0.5s; }
+        .report-grid > .report-card:nth-child(6) { animation-delay: 0.6s; }
+        .report-grid > .report-card:nth-child(7) { animation-delay: 0.7s; }
+
+        /* Graceful fallback for browsers that don't support animations */
+        @supports not (animation) {
+            .report-card {
+                opacity: 1;
+            }
+        }
+
+        .report-card:hover {
+             transform: translateY(-5px);
+             box-shadow: 0 8px 20px rgba(0,0,0,0.08);
+        }
+
+        /* Icon Hover Animations */
+        .report-card:hover .icon-sleep svg { animation: rock 1.5s infinite ease-in-out; }
+        .report-card:hover .icon-heart svg { animation: pulse 1s infinite ease-in-out; }
+        .report-card:hover .icon-movement svg { animation: jiggle 0.6s infinite; }
+        .report-card:hover .icon-weight svg { animation: bounce 1.2s infinite ease-in-out; }
+        .report-card:hover .icon-blood svg, .report-card:hover .icon-temp svg { transform: scale(1.1); }
+
+
+        /* Special styling for the full-width summary card */
+        .summary-card {
+            grid-column: 1 / -1; /* Makes the card span the full grid width */
+            background: linear-gradient(135deg, #4f46e5, #7c3aed);
+            color: white;
+            padding: 2.5rem;
+            text-align: center;
+        }
+
+        .summary-card-header {
+            margin-bottom: 2rem;
+        }
+
+        .summary-card-header h1 {
+            font-size: 2.5rem;
+            font-weight: 700;
+            margin: 0 0 0.5rem 0;
+        }
+
+        .summary-card-header p {
+            font-size: 1.1rem;
+            opacity: 0.8;
+            margin: 0;
+        }
+
+        /* Special styling for the full-width symptoms card */
+        .symptoms-highlight-card {
+            grid-column: 1 / -1;
+            background-color: var(--symptoms-highlight-bg);
+            padding: 2rem;
+        }
+
+        .symptoms-highlight-card .card-header {
+            justify-content: center;
+            margin-bottom: 1.5rem;
+        }
+
+        .summary-metrics {
+            display: flex;
+            justify-content: space-around;
+            text-align: center;
+            width: 100%;
+        }
+
+        .metric-item {
+            flex: 1;
+            padding: 0 1rem;
+        }
+
+        .summary-number {
+            font-size: 3.5rem;
+            font-weight: 700;
+            margin: 0;
+        }
+
+        .summary-number span.unit {
+            font-size: 2rem;
+            opacity: 0.8;
+        }
+
+        .summary-label {
+            font-size: 1rem;
+            margin-top: 0.5rem;
+            opacity: 0.9;
+        }
+
+        /* Color override for light background symptom card */
+        .symptoms-highlight-card .summary-number { color: var(--primary-metric-color); }
+        .symptoms-highlight-card .summary-label { color: var(--secondary-text-color); opacity: 1;}
+        .symptoms-highlight-card .summary-number span.unit { color: var(--secondary-text-color); }
+
+
+        .card-header {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        /* Icon Styles */
+        .icon {
+            width: 48px;
+            height: 48px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            border-radius: 50%;
+        }
+
+        .icon svg {
+            width: 24px;
+            height: 24px;
+            transition: transform 0.3s ease;
+        }
+
+        /* Icon Colors */
+        .icon.blood { background-color: #fee2e2; color: #991b1b; }
+        .icon.heart { background-color: #ffedd5; color: #9a3412; }
+        .icon.temp { background-color: #dbeafe; color: #1e40af; }
+        .icon.sleep { background-color: #f3e8ff; color: #581c87; }
+        .icon.weight { background-color: #d1fae5; color: #065f46; }
+        .icon.movement { background-color: #cffafe; color: #0e7490; }
+
+        .card-header h2 {
+            font-size: 1.1rem;
+            font-weight: 500;
+            margin: 0;
+            color: var(--heading-color);
+        }
+
+        /* Card Body Styles */
+        .card-body {
+            flex-grow: 1;
+        }
+
+        .primary-metric {
+            font-size: 2.5rem;
+            font-weight: 700;
+            color: var(--primary-metric-color);
+            margin: 0;
+        }
+
+        .primary-metric span.unit {
+            font-size: 1.2rem;
+            font-weight: 500;
+            color: var(--secondary-text-color);
+            margin-left: 0.25rem;
+        }
+
+        .secondary-text {
+            font-size: 0.9rem;
+            color: var(--secondary-text-color);
+            margin: 0.25rem 0 0 0;
+        }
+
+        .trend {
+            font-style: italic;
+            color: #16a34a; /* Green for positive trends */
+            font-size: 0.9rem;
+            margin-top: 8px;
+        }
+
+        .trend.negative {
+            color: #ef4444; /* Red for negative trends */
+        }
+
+        .trend.neutral {
+            color: var(--secondary-text-color);
+        }
+
+        /* Theme Switcher Styles */
+        .theme-switcher {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-top: 2rem; /* Space above the switcher */
+        }
+
+        .switch {
+            position: relative;
+            display: inline-block;
+            width: 50px;
+            height: 26px;
+        }
+
+        .switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #ccc;
+            transition: .4s;
+            border-radius: 26px;
+        }
+
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 20px;
+            width: 20px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: .4s;
+            border-radius: 50%;
+        }
+
+        input:checked + .slider {
+            background-color: #4f46e5;
+        }
+
+        input:focus + .slider {
+            box-shadow: 0 0 1px #4f46e5;
+        }
+
+        input:checked + .slider:before {
+            transform: translateX(24px);
+        }
+
+        .theme-switcher svg {
+            width: 20px;
+            height: 20px;
+            color: #6b7280;
+        }
+
+        body.dark-theme .theme-switcher svg {
+            color: #9ca3af;
+        }
+
+        /* Responsive Adjustments */
+        @media (max-width: 768px) {
+            body {
+                padding: 1rem 0;
+            }
+            .main-container {
+                min-width: 0; /* Allow container to shrink */
+                padding: 1.5rem;
+                margin: 1rem;
+                box-sizing: border-box;
+            }
+            .summary-card-header h1 {
+                font-size: 2rem;
+            }
+            .summary-metrics {
+                flex-direction: column;
+                gap: 2rem;
+            }
+            .summary-number {
+                font-size: 3rem;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="main-container">
+
+        <div class="report-grid">
+
+            <!-- Summary Card - Full Width -->
+            <div class="report-card summary-card">
+                <div class="summary-card-header">
+                    <h1>Your Weekly Report</h1>
+                    <p>For the week of July 28 - August 3, 2025</p>
+                </div>
+                <div class="summary-metrics">
+                    <div class="metric-item">
+                        <p class="summary-number" data-value="21">21</p>
+                        <p class="summary-label">Weeks Pregnant</p>
+                    </div>
+                    <div class="metric-item">
+                        <p class="summary-number" data-value="89">89<span class="unit">%</span></p>
+                        <p class="summary-label">Ring Wear Time</p>
+                    </div>
+                    <div class="metric-item">
+                        <p class="summary-number" data-value="5">5</p>
+                        <p class="summary-label">Check-in's Completed</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Sleep Card -->
+            <div class="report-card">
+                <div class="card-header">
+                    <div class="icon icon-sleep">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M21.752 15.002A9.718 9.718 0 0118 15.75c-5.385 0-9.75-4.365-9.75-9.75 0-1.33.266-2.597.748-3.752A9.753 9.753 0 003 11.25C3 16.635 7.365 21 12.75 21a9.753 9.753 0 009.002-5.998z" /></svg>
+                    </div>
+                    <h2>Avg. Sleep</h2>
+                </div>
+                <div class="card-body">
+                    <p class="primary-metric">7.2<span class="unit">hrs</span></p>
+                    <p class="secondary-text">52 hours this week</p>
+                </div>
+            </div>
+
+            <!-- Heart Rate Card -->
+            <div class="report-card">
+                <div class="card-header">
+                    <div class="icon icon-heart">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M21 8.25c0-2.485-2.099-4.5-4.688-4.5-1.935 0-3.597 1.126-4.312 2.733-.715-1.607-2.377-2.733-4.313-2.733C5.1 3.75 3 5.765 3 8.25c0 7.22 9 12 9 12s9-4.78 9-12z" /></svg>
+                    </div>
+                    <h2>Resting Heart Rate</h2>
+                </div>
+                <div class="card-body">
+                    <p class="primary-metric">72<span class="unit">bpm</span></p>
+                    <p class="secondary-text">48.3M beats this week</p>
+                </div>
+            </div>
+
+            <!-- Movement Card -->
+            <div class="report-card">
+                <div class="card-header">
+                    <div class="icon icon-movement">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456zM16.898 20.553L16.5 21.75l-.398-1.197a3.375 3.375 0 00-2.456-2.456L12.75 18l1.197-.398a3.375 3.375 0 002.456-2.456L16.5 14.25l.398 1.197a3.375 3.375 0 002.456 2.456L20.25 18l-1.197.398a3.375 3.375 0 00-2.456 2.456z" /></svg>
+                    </div>
+                    <h2>Avg. Steps</h2>
+                </div>
+                <div class="card-body">
+                    <p class="primary-metric">6,345</p>
+                    <p class="secondary-text">200 total minutes</p>
+                    <p class="trend negative">200 fewer steps than last week</p>
+                </div>
+            </div>
+
+            <!-- Blood Pressure Card -->
+            <div class="report-card">
+                <div class="card-header">
+                    <div class="icon icon-blood">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M8.25 6.75h8.25a2.25 2.25 0 012.25 2.25v9a2.25 2.25 0 01-2.25 2.25H8.25a2.25 2.25 0 01-2.25-2.25v-9a2.25 2.25 0 012.25-2.25z" /></svg>
+                    </div>
+                    <h2>Blood Pressure</h2>
+                </div>
+                <div class="card-body">
+                     <p class="primary-metric">4<span class="unit">readings</span></p>
+                     <p class="secondary-text">None over 140/90</p>
+                     <p class="trend">Lower than last week</p>
+                </div>
+            </div>
+
+            <!-- Temperature Card -->
+            <div class="report-card">
+                <div class="card-header">
+                    <div class="icon icon-temp">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6"><path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3" /></svg>
+                    </div>
+                    <h2>Temperature</h2>
+                </div>
+                <div class="card-body">
+                    <p class="primary-metric">Steady</p>
+                    <p class="secondary-text">No readings over 100.0°F</p>
+                    <p class="trend neutral">403,560 total readings</p>
+                </div>
+            </div>
+
+            <!-- Weight Card -->
+            <div class="report-card">
+                <div class="card-header">
+                    <div class="icon icon-weight">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" /></svg>
+                    </div>
+                    <h2>Weight Change</h2>
+                </div>
+                <div class="card-body">
+                    <p class="primary-metric">+3<span class="unit">lbs</span></p>
+                    <p class="secondary-text">This week</p>
+                </div>
+            </div>
+
+            <!-- Symptoms Card - Full Width -->
+            <div class="report-card symptoms-highlight-card">
+                <div class="card-header">
+                    <h2>Top Symptoms</h2>
+                </div>
+                <div class="summary-metrics">
+                    <div class="metric-item">
+                        <p class="summary-number" data-value="6">6<span class="unit"> days</span></p>
+                        <p class="summary-label">Back Pain</p>
+                    </div>
+                    <div class="metric-item">
+                        <p class="summary-number" data-value="4">4<span class="unit"> days</span></p>
+                        <p class="summary-label">Indigestion</p>
+                    </div>
+                    <div class="metric-item">
+                        <p class="summary-number" data-value="3">3<span class="unit"> days</span></p>
+                        <p class="summary-label">Nausea</p>
+                    </div>
+                     <div class="metric-item">
+                        <p class="summary-number" data-value="1">1<span class="unit"> day</span></p>
+                        <p class="summary-label">Headache</p>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <div class="theme-switcher">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M12 3v2.25m6.364.386l-1.591 1.591M21 12h-2.25m-.386 6.364l-1.591-1.591M12 18.75V21m-4.773-4.227l-1.591 1.591M5.25 12H3m4.227-4.773L5.636 5.636M15.75 12a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0z" /></svg>
+        <label class="switch">
+            <input type="checkbox" id="theme-toggle">
+            <span class="slider"></span>
+        </label>
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M21.752 15.002A9.718 9.718 0 0118 15.75c-5.385 0-9.75-4.365-9.75-9.75 0-1.33.266-2.597.748-3.752A9.753 9.753 0 003 11.25C3 16.635 7.365 21 12.75 21a9.753 9.753 0 009.002-5.998z" /></svg>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            // Number count-up animation
+            const counters = document.querySelectorAll('.summary-number');
+            const animationDuration = 1500; // in milliseconds
+
+            const animateValue = (obj, start, end, duration) => {
+                let startTimestamp = null;
+                const step = (timestamp) => {
+                    if (!startTimestamp) startTimestamp = timestamp;
+                    const progress = Math.min((timestamp - startTimestamp) / duration, 1);
+                    const currentValue = Math.floor(progress * (end - start) + start);
+                    
+                    const unitSpan = obj.querySelector('span.unit');
+                    const unitHTML = unitSpan ? unitSpan.outerHTML : '';
+
+                    obj.innerHTML = currentValue + unitHTML;
+
+                    if (progress < 1) {
+                        window.requestAnimationFrame(step);
+                    }
+                };
+                window.requestAnimationFrame(step);
+            };
+
+            counters.forEach(counter => {
+                const targetValue = parseInt(counter.getAttribute('data-value'), 10);
+                const unitSpan = counter.querySelector('span.unit');
+                const unitHTML = unitSpan ? unitSpan.outerHTML : '';
+                const numberPart = counter.innerHTML.split('<')[0];
+                const initialDisplayValue = isNaN(parseInt(numberPart, 10)) ? '' : '0';
+                
+                counter.innerHTML = initialDisplayValue + unitHTML;
+                
+                if (!isNaN(targetValue)) {
+                    animateValue(counter, 0, targetValue, animationDuration);
+                }
+            });
+
+            // Theme switcher logic
+            const themeToggle = document.getElementById('theme-toggle');
+            const body = document.body;
+
+            const applyTheme = (theme) => {
+                if (theme === 'dark') {
+                    body.classList.add('dark-theme');
+                    themeToggle.checked = true;
+                } else {
+                    body.classList.remove('dark-theme');
+                    themeToggle.checked = false;
+                }
+            };
+
+            const prefersDarkScheme = window.matchMedia('(prefers-color-scheme: dark)');
+            applyTheme(prefersDarkScheme.matches ? 'dark' : 'light');
+
+            prefersDarkScheme.addEventListener('change', (e) => {
+                applyTheme(e.matches ? 'dark' : 'light');
+            });
+
+            themeToggle.addEventListener('change', () => {
+                if (themeToggle.checked) {
+                    applyTheme('dark');
+                } else {
+                    applyTheme('light');
+                }
+            });
+        });
+    </script>
+</body>
+</html>

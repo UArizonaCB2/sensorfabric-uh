@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Weekly Health Report</title>
+</head>
+<body>
+    <h1>Weekly Health Report</h1>
+
+    <div class="metric">
+        <strong>Enrollment Status:</strong> {{ weeks_enrolled }} weeks enrolled
+    </div>
+
+    <div class="metric">
+        <strong>Pregnancy Progress:</strong> {{ current_pregnancy_week }} weeks - {{ current_pregnancy_week + 1 }} weeks pregnant
+    </div>
+
+    <div class="metric">
+        <strong>Device Usage:</strong> {{ ring_wear_percentage }}% ring wear time
+    </div>
+
+    <div class="metric">
+        <strong>Top Symptoms:</strong> {{ ', '.join(symptoms) }}
+    </div>
+
+    <div class="metric">
+        <strong>Survey Completion:</strong> {{ surveys_completed }} completed surveys.
+    </div>
+
+    {% if blood_pressure_enabled %}
+    <div class="metric">
+        <strong>Blood Pressure:</strong> You recorded {{ bp_count }} blood pressures this week.
+        Blood pressure trend: {{ bp_trend }} as last week.
+        Number of blood pressures over 140/90 = {{ bp_high_readings or "none" }}
+    </div>
+    {% endif %}
+
+    {% if heart_rate_enabled %}
+    <div class="metric">
+        <strong>Heart Rate:</strong> {{ heart_rate_total_beats }} heart beats recorded.
+        Average resting heart rate of {{ heart_rate_avg_resting }}
+    </div>
+    {% endif %}
+
+    {% if temperature_enabled %}
+    <div class="metric">
+        <strong>Temperature:</strong> Total temperature readings = {{ temp_count }}.
+        Trending = {{ temp_trend }}
+        <br>
+        {{ temp_high_readings or "No" }} temperatures over 100.0°F recorded
+    </div>
+    {% endif %}
+
+    {% if sleep_enabled %}
+    <div class="metric">
+        <strong>Sleep:</strong> {{ sleep_total_hours }} hours of sleep this week.
+        Average {{ sleep_avg_per_night }} per night.
+    </div>
+    {% endif %}
+
+    {% if weight_enabled %}
+    <div class="metric">
+        <strong>Weight:</strong> Change in weight = {{ weight_change }} lbs since {{ enrolled_date }}
+    </div>
+    {% endif %}
+
+    {% if movement_enabled %}
+    <div class="metric">
+        <strong>Movement:</strong> Total movement this week = {{ movement_total_minutes }} minutes.
+        Average steps per day = {{ movement_avg_steps_per_day }}
+        <br>
+        Trend - {{ movement_step_trend }}
+        {{ "fewer" if movement_step_trend < 0 else "more" }} than last week
+    </div>
+    {% endif %}
+
+    <div class="metric">
+        <small>Report generated on {{ report_date }}</small>
+    </div>
+</body>
+</html>
