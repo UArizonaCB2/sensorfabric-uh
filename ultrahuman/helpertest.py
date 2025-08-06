@@ -1,30 +1,40 @@
 #!/usr/bin/env python3
 
 from sensorfabric.mdh import MDH
+from sensorfabric.athena import athena
 import dotenv
 from helper import Helper
 from datetime import datetime, timedelta, date
+
+dev_id = 'ba244766-7bd6-408d-8208-0a29c8949321'
+prod_id = '8c08c4c6-f56d-408c-9db7-706d3a9f730e'
 
 def setup():
     config = dotenv.dotenv_values('/Users/shravan/Amahealth/mdh-ema/.env')
     mdh = MDH(account_secret=config['RKS_PRIVATE_KEY'],
               account_name=config['RKS_SERVICE_ACCOUNT'],
-              project_id='ba244766-7bd6-408d-8208-0a29c8949321')
+              project_id=dev_id)
 
     #participant = mdh.getParticipant('BB-4194-0806')
     #customFields = participant['customFields']
     #print(customFields['uh_sync_timestamp'])
     #print(participant)
+    amdh = athena(database='mdh_export_database_rk_033fa2f7_flinn_study_prod',
+                  workgroup='mdh_export_database_external_prod',
+                  s3_location='s3://pep-mdh-export-database-prod/execution/rk_033fa2f7_flinn_study')
 
-    helper = Helper(mdh, 'BB-3234-3734', date.fromisoformat('2025-07-26'))
+    helper = Helper(mdh, amdh, None, 'MDH-6497-9927', date.fromisoformat('2025-04-24'))
 
     return helper
 
 myhelper = setup()
-ringwear = myhelper.ringWearTime()
-print(ringwear)
 weight = myhelper.weightSummary()
 print(weight)
+exit()
+bp = myhelper.bloodPressure()
+print(bp)
+ringwear = myhelper.ringWearTime()
+print(ringwear)
 movement = myhelper.movementSummary()
 print(movement)
 symptoms = myhelper.topSymptomsRecorded()
@@ -35,9 +45,7 @@ temp = myhelper.temperatureSummary()
 print(temp)
 hr = myhelper.heartRateSummary()
 print(hr)
-bp = myhelper.bloodPressure()
-print(bp)
-enrolled_weeks = myhelper.weeksEnrolled()
+nrolled_weeks = myhelper.weeksEnrolled()
 print(enrolled_weeks)
 ga_weeks = myhelper.weeksPregnant()
 print(ga_weeks)

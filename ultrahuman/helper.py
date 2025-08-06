@@ -1,9 +1,18 @@
 from sensorfabric.mdh import MDH
+from sensorfabric.athena import athena
+import pandas as pd
 from datetime import datetime, timezone, date, timedelta
 import math
 import inspect
 import os
 import random
+
+"""
+Current Limitations
+-------------------
+1. We don't have any data inside GoogleFit or HealthConnect for Android phones. Hence we are not able to test
+    out weight data going into it.
+"""
 
 class ParticipantNotEnrolled(Exception):
     """Raised when the participant is not enrolled in the study."""
@@ -12,15 +21,19 @@ class ParticipantNotEnrolled(Exception):
 class Helper:
     """ Helper class for reporting template"""
     def __init__(self, mdh: MDH,
+                 athena_mdh: athena,
+                 athena_uh: athena,
                  participant_id: str,
                  end_date: date):
         """
         Paramters
         ---------
         1. mdh (sensorfabric.mdh.MDH) - A sensorfabric MDH object.
-        2. participant_id (string) - Participant ID for which the report is being
+        2. athena_mdh (sensorfabric.athena.athena) - Athena connection to MDH backend.
+        3. athena_uh (sensorfabric.athena.athena) - Athena connection to our AWS UH backend.
+        4. participant_id (string) - Participant ID for which the report is being
            created.
-        3. end_date (date) - Last date (inclusive) of the week you want to use for calculating the
+        5. end_date (date) - Last date (inclusive) of the week you want to use for calculating the
             reporting metrics.
 
         Returns
@@ -32,6 +45,8 @@ class Helper:
         ParticipantNotEnrolled - If the participant status is not enrolled
         """
         self.mdh: MDH = mdh
+        self.athena_mdh = athena_mdh
+        self.athena_uh = athena_uh
         self.participant_id: str = participant_id
         self.end_date: date = end_date
         # Weeks are assumed to be inclusive of start and end dates. If the end date is a Sat,
@@ -130,33 +145,66 @@ class Helper:
         if os.getenv('TEMPLATE_MODE', 'PRODUCTION') == 'PRESENT':
             return self._debugOutputs()
 
-        this_week = self.mdh.getDeviceDataPoints('Omron',
-                                     ['BloodPressureSystolic', 'BloodPressureDiastolic'],
-                                     queryParam={
-                                         'participantIdentifier': self.participant_id,
-                                         'observedAfter': self.start_date.isoformat(),
-                                         'observedBefore': self.end_date.isoformat(),
-                                     })
+        query_this_week = f"""
+            select systolic, diastolic from omronbloodpressure
+                where participantIdentifier = '{self.participant_id}'
+                and datetimelocal >= date('{self.start_date.isoformat()}')
+                and datetimelocal <= date('{self.end_date.isoformat()}')
+        """
         # We are using start_date - 7d and end_date - 1d is for the previous week.
         # For example from if the current week is from (Sun - Sat) then the previous week
         # is the previous (Sun - Sat)
-        previous_week = self.mdh.getDeviceDataPoints('Omron',
-                                     ['BloodPressureSystolic', 'BloodPressureDiastolic'],
-                                     queryParam={
-                                         'participantIdentifier': self.participant_id,
-                                         'observedAfter': (self.start_date - timedelta(days=7)).isoformat(),
-                                         'observedBefore': (self.end_date - timedelta(days=1)).isoformat(),
-                                     })
+        query_prev_week = f"""
+            select systolic, diastolic from omronbloodpressure
+                where participantIdentifier = '{self.participant_id}'
+                and datetimelocal >= date('{(self.start_date - timedelta(days=7)).isoformat()}')
+                and datetimelocal <= date('{(self.end_date - timedelta(days=1)).isoformat()}')
+        """
 
-        bp_counts = 0
-        above_threshold_counts = 0
-        this_week_map = 0
-        previous_week_map = 0
-        # BP comparison between weeks is done using MAP (Mean Arterial Pressure)
-        # `MAP = (2 x DBP + SBP) / 3`
+        this_week: pd.DataFrame = self.athena_mdh.execQuery(query_this_week)
+        previous_week: pd.DataFrame = self.athena_mdh.execQuery(query_prev_week)
 
-        # TODO: Need to look at the raw data and figure out how to drop SBP and DBP values
-        # belonging to the same meassurement together.
+        #this_week = pd.concat([this_week, pd.DataFrame({'systolic':[170], 'diastolic':[10]})])
+
+        this_week['systolic'] = pd.to_numeric(this_week['systolic'], errors='coerce')
+        this_week['diastolic'] = pd.to_numeric(this_week['diastolic'], errors='coerce')
+        previous_week['systolic'] = pd.to_numeric(previous_week['systolic'], errors='coerce')
+        previous_week['diastolic'] = pd.to_numeric(previous_week['diastolic'], errors='coerce')
+
+        high_values = 0
+        # Check for values which are above the threshold.
+        if this_week.shape[0] > 0:
+            for sys, dia in zip(this_week['systolic'], this_week['diastolic']):
+                try:
+                    if sys > 140 or dia > 90:
+                        high_values += 1
+                except:
+                    # If there are any errors then we can't do much here right now.
+                    # Let's just move ahead for now.
+                    continue
+
+        # Not always gaurenteed that we will have data for this week and the past.
+        trend = 'None'
+        if this_week.shape[0] > 0 and previous_week.shape[0] > 0:
+            sys_curr = this_week['systolic'].mean()
+            dia_curr = this_week['diastolic'].mean()
+            map_curr = (2 * dia_curr + sys_curr) / 3
+
+            sys_prev = previous_week['systolic'].mean()
+            dia_prev = previous_week['diastolic'].mean()
+            map_prev = (2 * dia_prev + sys_prev) / 3
+
+            trend = 'Steady'
+            if map_curr > map_prev:
+                trend = 'Higher'
+            elif map_curr < map_prev:
+                trend = 'Lower'
+
+        return {
+                'counts': this_week.shape[0],
+                'above_threshold_counts': high_values,
+                'trend': trend,
+        }
 
     def heartRateSummary(self):
         """
@@ -190,11 +238,26 @@ class Helper:
     def weightSummary(self):
         """
         Get weight summary values in the past week.
+        Since we don't really know if users are changing device or what health enclave our
+        weight data is going to be, we have to unfortunately test the weight values accross all
+        3 pools - HealthKit, GoogleFit, Healthconnect (Android's new thing).
+        TODO: Add support here for Android devices which includes - GoogleFit and Healthconnect
         """
         if os.getenv('TEMPLATE_MODE', 'PRODUCTION') == 'PRESENT':
             return self._debugOutputs()
 
-        raise ('Function not implemented')
+        query = f"""
+            select value, units from healthkitv2samples
+                where type = 'Weight' and
+                participantidentifier = '{self.participant_id}'
+        """
+        healthkit = self.athena_mdh.execQuery(query)
+        print(healthkit)
+
+        return {
+            # Can return both positive or negative values.
+            'change_in_weight': random.randint(0, 10) - 5,
+        }
 
     def movementSummary(self):
         """

@@ -400,15 +400,15 @@
                 </div>
                 <div class="summary-metrics">
                     <div class="metric-item">
-                        <p class="summary-number" data-value="21">21</p>
+                        <p class="summary-number" data-value="{{current_pregnancy_week}}">{{current_pregnancy_week}}</p>
                         <p class="summary-label">Weeks Pregnant</p>
                     </div>
                     <div class="metric-item">
-                        <p class="summary-number" data-value="89">89<span class="unit">%</span></p>
+                        <p class="summary-number" data-value="{{ring_wear_percentage}}">{{ring_wear_percentage}}<span class="unit">%</span></p>
                         <p class="summary-label">Ring Wear Time</p>
                     </div>
                     <div class="metric-item">
-                        <p class="summary-number" data-value="5">5</p>
+                        <p class="summary-number" data-value="{{surveys_completed}}">{{surveys_completed}}</p>
                         <p class="summary-label">Check-in's Completed</p>
                     </div>
                 </div>
@@ -423,8 +423,8 @@
                     <h2>Avg. Sleep</h2>
                 </div>
                 <div class="card-body">
-                    <p class="primary-metric">7.2<span class="unit">hrs</span></p>
-                    <p class="secondary-text">52 hours this week</p>
+                    <p class="primary-metric">{{sleep_avg_per_night}}<span class="unit">hrs</span></p>
+                    <p class="secondary-text">{{sleep_total_hours}} hours this week</p>
                 </div>
             </div>
 
@@ -437,8 +437,8 @@
                     <h2>Resting Heart Rate</h2>
                 </div>
                 <div class="card-body">
-                    <p class="primary-metric">72<span class="unit">bpm</span></p>
-                    <p class="secondary-text">48.3M beats this week</p>
+                    <p class="primary-metric">{{heart_rate_avg_resting}}<span class="unit">bpm</span></p>
+                    <p class="secondary-text">{{heart_rate_total_beats}} beats this week</p>
                 </div>
             </div>
 
@@ -451,9 +451,9 @@
                     <h2>Avg. Steps</h2>
                 </div>
                 <div class="card-body">
-                    <p class="primary-metric">6,345</p>
-                    <p class="secondary-text">200 total minutes</p>
-                    <p class="trend negative">200 fewer steps than last week</p>
+                    <p class="primary-metric">{{movement_avg_steps_per_day}}</p>
+                    <p class="secondary-text">{{movement_total_minutes}} total minutes</p>
+                    <p class="trend negative">{{movement_step_trend}} steps than last week</p>
                 </div>
             </div>
 
@@ -466,9 +466,9 @@
                     <h2>Blood Pressure</h2>
                 </div>
                 <div class="card-body">
-                     <p class="primary-metric">4<span class="unit">readings</span></p>
-                     <p class="secondary-text">None over 140/90</p>
-                     <p class="trend">Lower than last week</p>
+                     <p class="primary-metric">{{bp_count}}<span class="unit">readings</span></p>
+                     <p class="secondary-text">{{bp_high_readings}} over 140/90</p>
+                     <p class="trend">{{bp_trend}} than last week</p>
                 </div>
             </div>
 
@@ -481,9 +481,9 @@
                     <h2>Temperature</h2>
                 </div>
                 <div class="card-body">
-                    <p class="primary-metric">Steady</p>
-                    <p class="secondary-text">No readings over 100.0°F</p>
-                    <p class="trend neutral">403,560 total readings</p>
+                    <p class="primary-metric">{{temp_trend}}</p>
+                    <p class="secondary-text">{{temp_high_readings}} readings over 100.0°F</p>
+                    <p class="trend neutral">{{temp_count}} total readings</p>
                 </div>
             </div>
 
@@ -496,7 +496,7 @@
                     <h2>Weight Change</h2>
                 </div>
                 <div class="card-body">
-                    <p class="primary-metric">+3<span class="unit">lbs</span></p>
+                    <p class="primary-metric">{{weight_change}}<span class="unit">lbs</span></p>
                     <p class="secondary-text">This week</p>
                 </div>
             </div>

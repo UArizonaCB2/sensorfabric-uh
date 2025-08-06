@@ -74,7 +74,7 @@ class TemplateGenerator:
             # TODO need to use participant's timezone? not sure.
             last_week_utc_timestamp = datetime.strptime(target_week, '%Y-%m-%d')
 
-        helper = Helper(mdh=self.mdh, participant_id=participant_id, end_date=last_week_utc_timestamp)
+        helper = Helper(mdh=self.mdh, athena_mdh=None, athena_uh=None, participant_id=participant_id, end_date=last_week_utc_timestamp)
 
         ringwear = helper.ringWearTime()
         weight = helper.weightSummary()
