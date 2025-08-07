@@ -42,7 +42,7 @@ discover_lambda_functions() {
     local functions_json
     functions_json=$(aws lambda list-functions \
         --region "$AWS_REGION" \
-        --query 'Functions[?contains(FunctionName, `_biobayb_uh_uploader_Lambda`) || contains(FunctionName, `_biobayb_uh_publisher_Lambda`) || contains(FunctionName, `_biobayb_uh_template_generator_Lambda`)].FunctionName' \
+        --query 'Functions[?contains(FunctionName, `_biobayb_uh_uploader_Lambda`) || contains(FunctionName, `_biobayb_uh_publisher_Lambda`) || contains(FunctionName, `_biobayb_uh_template_generator_Lambda`) || contains(FunctionName, `_biobayb_uh_jwt_generator_Lambda`)].FunctionName' \
         --output json 2>/dev/null || echo "[]")
     
     log_debug "Raw AWS response: $functions_json"
@@ -119,6 +119,20 @@ discover_lambda_functions() {
             fi
             
             local key="${project_name}-uh_template_generator"
+            LAMBDA_FUNCTIONS["$key"]="$func"
+            log_info "Mapped $key -> $func"
+        elif [[ "$func" == *"_biobayb_uh_jwt_generator_Lambda" ]]; then
+            # Extract project name from function name (format: {project_name}_biobayb_uh_jwt_generator_Lambda)
+            local project_name="${func%_biobayb_uh_jwt_generator_Lambda}"
+            log_debug "Extracted project name for JWT generator: '$project_name'"
+            
+            # Apply stack filter if specified (match against project name)
+            if [ -n "$STACK_FILTER" ] && [ "$project_name" != "$STACK_FILTER" ]; then
+                log_debug "Skipping $func (not in filtered stack: $STACK_FILTER)"
+                continue
+            fi
+            
+            local key="${project_name}-uh_jwt_generator"
             LAMBDA_FUNCTIONS["$key"]="$func"
             log_info "Mapped $key -> $func"
         else
@@ -361,7 +375,8 @@ update_lambda_functions() {
             --function-name "$aws_func" \
             --image-uri "$shared_image_uri" \
             --region "$AWS_REGION" \
-            --output table; then
+            --no-cli-pager \
+            --output json > /dev/null; then
             
             log_info "Successfully updated Lambda function $aws_func"
             
@@ -402,7 +417,8 @@ update_lambda_functions() {
                             --name "$alias" \
                             --function-version "$new_version" \
                             --region "$AWS_REGION" \
-                            --output table; then
+                            --no-cli-pager \
+                            --output json > /dev/null; then
                             log_info "Successfully updated alias '$alias' for $aws_func"
                         else
                             log_warning "Failed to update alias '$alias' for $aws_func"
@@ -510,6 +526,130 @@ cleanup_build_artifacts() {
     log_info "Cleanup completed"
 }
 
+# Security validation functions
+check_public_s3_buckets() {
+    log_header "Checking for public S3 buckets..."
+    
+    local public_buckets=()
+    
+    # Get all S3 buckets
+    log_debug "Retrieving list of S3 buckets..."
+    local buckets
+    
+    if ! buckets=$(aws s3api list-buckets --query 'Buckets[].Name' --output text 2>/dev/null) || [ -z "$buckets" ]; then
+        log_warning "Could not retrieve S3 bucket list or no buckets found"
+        return 0
+    fi
+    
+    # Check each bucket for public access
+    for bucket in $buckets; do
+        # Skip buckets that start with 'sagemaker-' or 'cdk-', or whitelist 'ymap-resources'
+        if [[ "$bucket" == sagemaker-* ]] || [[ "$bucket" == cdk-* ]] || [[ "$bucket" == "ymap-resources" ]]; then
+            log_debug "Skipping bucket: $bucket (ignored prefix or whitelisted)"
+            continue
+        fi
+        
+        log_debug "Checking bucket: $bucket"
+        
+        # Check bucket policy for public access
+        local has_public_policy=false
+        if aws s3api get-bucket-policy --bucket "$bucket" --output text &>/dev/null; then
+            local policy
+            policy=$(aws s3api get-bucket-policy --bucket "$bucket" --query 'Policy' --output text 2>/dev/null)
+            if echo "$policy" | grep -q '"Principal":\s*"\*"' || echo "$policy" | grep -q '"Principal":\s*{\s*"AWS":\s*"\*"'; then
+                has_public_policy=true
+                log_debug "Bucket $bucket has public policy"
+            fi
+        fi
+        
+        # Check bucket ACL for public access
+        local has_public_acl=false
+        local acl_check
+        acl_check=$(aws s3api get-bucket-acl --bucket "$bucket" --query 'Grants[?Grantee.URI==`http://acs.amazonaws.com/groups/global/AllUsers` || Grantee.URI==`http://acs.amazonaws.com/groups/global/AuthenticatedUsers`]' --output json 2>/dev/null)
+        if [ "$acl_check" != "[]" ] && [ "$acl_check" != "null" ]; then
+            has_public_acl=true
+            log_debug "Bucket $bucket has public ACL"
+        fi
+        
+        # Check public access block settings
+        local public_access_blocked=true
+        local pab_settings
+        if pab_settings=$(aws s3api get-public-access-block --bucket "$bucket" --query 'PublicAccessBlockConfiguration' --output json 2>/dev/null) && [ "$pab_settings" != "null" ]; then
+            # If any of these settings is false, public access might be allowed
+            local block_public_acls block_public_policy ignore_public_acls restrict_public_buckets
+            if command -v jq &> /dev/null; then
+                block_public_acls=$(echo "$pab_settings" | jq -r '.BlockPublicAcls // true')
+                block_public_policy=$(echo "$pab_settings" | jq -r '.BlockPublicPolicy // true')
+                ignore_public_acls=$(echo "$pab_settings" | jq -r '.IgnorePublicAcls // true')
+                restrict_public_buckets=$(echo "$pab_settings" | jq -r '.RestrictPublicBuckets // true')
+                
+                if [ "$block_public_acls" = "false" ] || [ "$block_public_policy" = "false" ] || 
+                   [ "$ignore_public_acls" = "false" ] || [ "$restrict_public_buckets" = "false" ]; then
+                    public_access_blocked=false
+                    log_debug "Bucket $bucket has public access block settings that allow public access"
+                fi
+            else
+                # Fallback without jq - assume potentially public if we can't parse
+                if echo "$pab_settings" | grep -q '"false"'; then
+                    public_access_blocked=false
+                    log_debug "Bucket $bucket may have public access (fallback check)"
+                fi
+            fi
+        else
+            # No public access block configured - potentially public
+            public_access_blocked=false
+            log_debug "Bucket $bucket has no public access block configured"
+        fi
+        
+        # Determine if bucket is effectively public
+        if [ "$has_public_policy" = true ] || [ "$has_public_acl" = true ] || [ "$public_access_blocked" = false ]; then
+            # Double-check by testing actual public access
+            local is_actually_public=false
+            
+            # Try to list objects without authentication (this is a more definitive test)
+            if curl -s -f "https://$bucket.s3.amazonaws.com/" >/dev/null 2>&1; then
+                is_actually_public=true
+                log_debug "Bucket $bucket confirmed publicly accessible via HTTP"
+            fi
+            
+            # If any indicators suggest it might be public, add to list
+            if [ "$is_actually_public" = true ] || [ "$has_public_policy" = true ] || [ "$has_public_acl" = true ]; then
+                public_buckets+=("$bucket")
+                log_warning "Found potentially public bucket: $bucket"
+            fi
+        fi
+    done
+    
+    # Report results
+    if [ ${#public_buckets[@]} -gt 0 ]; then
+        echo ""
+        echo -e "${RED}╔════════════════════════════════════════════════════════════════════════════════╗${NC}"
+        echo -e "${RED}║                                 SECURITY WARNING                               ║${NC}"
+        echo -e "${RED}║                                                                                ║${NC}"
+        echo -e "${RED}║                            PUBLIC S3 BUCKETS DETECTED!                        ║${NC}"
+        echo -e "${RED}║                                                                                ║${NC}"
+        echo -e "${RED}║  The following S3 buckets appear to have public access permissions:           ║${NC}"
+        echo -e "${RED}║                                                                                ║${NC}"
+        for bucket in "${public_buckets[@]}"; do
+            echo -e "${RED}║  • $bucket${NC}"
+            printf "${RED}║%-80s║${NC}\n" ""
+        done
+        echo -e "${RED}║                                                                                ║${NC}"
+        echo -e "${RED}║  This is a SECURITY RISK and violates your security policy.                   ║${NC}"
+        echo -e "${RED}║                                                                                ║${NC}"
+        echo -e "${RED}║  Please review and secure these buckets before proceeding with deployment.    ║${NC}"
+        echo -e "${RED}║                                                                                ║${NC}"
+        echo -e "${RED}║  Deployment has been CANCELLED for security reasons.                          ║${NC}"
+        echo -e "${RED}╚════════════════════════════════════════════════════════════════════════════════╝${NC}"
+        echo ""
+        
+        log_error "Deployment cancelled due to ${#public_buckets[@]} public S3 bucket(s)"
+        exit 1
+    else
+        log_info "No public S3 buckets detected - security check passed"
+    fi
+}
+
 # Validation functions
 validate_prerequisites() {
     log_header "Validating prerequisites..."
@@ -570,44 +710,6 @@ validate_prerequisites() {
     discover_lambda_functions
 }
 
-# Backup current Lambda functions
-backup_lambda_functions() {
-    log_header "Creating backup of current Lambda functions..."
-    
-    local timestamp
-    timestamp=$(date +%Y%m%d_%H%M%S)
-    local stack_suffix=""
-    if [ -n "$STACK_FILTER" ]; then
-        stack_suffix="_${STACK_FILTER}"
-    fi
-    local backup_dir="$SCRIPT_DIR/backup/${timestamp}${stack_suffix}"
-    mkdir -p "$backup_dir"
-    
-    for local_func in "${!LAMBDA_FUNCTIONS[@]}"; do
-        local aws_func=${LAMBDA_FUNCTIONS[$local_func]}
-        
-        log_info "Backing up $aws_func..."
-        
-        # Get function configuration
-        aws lambda get-function-configuration \
-            --function-name "$aws_func" \
-            --region "$AWS_REGION" \
-            --output json > "$backup_dir/${aws_func}_config.json" 2>/dev/null || {
-            log_warning "Could not backup configuration for $aws_func (function may not exist)"
-        }
-        
-        # Get function code location
-        aws lambda get-function \
-            --function-name "$aws_func" \
-            --region "$AWS_REGION" \
-            --output json > "$backup_dir/${aws_func}_function.json" 2>/dev/null || {
-            log_warning "Could not backup function code info for $aws_func"
-        }
-    done
-    
-    echo "$backup_dir" > "$SCRIPT_DIR/.last_backup"
-    log_info "Backup completed in: $backup_dir"
-}
 
 # Test Lambda functions
 test_lambda_functions() {
@@ -669,54 +771,6 @@ test_lambda_functions() {
     log_info "All Lambda function tests passed"
 }
 
-# Rollback to previous version
-rollback_deployment() {
-    log_header "Rolling back deployment..."
-    
-    if [ ! -f "$SCRIPT_DIR/.last_backup" ]; then
-        log_error "No backup found for rollback"
-        return 1
-    fi
-    
-    local backup_dir
-    backup_dir=$(cat "$SCRIPT_DIR/.last_backup")
-    if [ ! -d "$backup_dir" ]; then
-        log_error "Backup directory not found: $backup_dir"
-        return 1
-    fi
-    
-    log_info "Rolling back using backup: $backup_dir"
-    
-    for local_func in "${!LAMBDA_FUNCTIONS[@]}"; do
-        local aws_func=${LAMBDA_FUNCTIONS[$local_func]}
-        local config_file="$backup_dir/${aws_func}_config.json"
-        local function_file="$backup_dir/${aws_func}_function.json"
-        
-        if [ -f "$config_file" ] && [ -f "$function_file" ]; then
-            log_info "Rolling back $aws_func..."
-            
-            # Get previous image URI
-            local image_uri
-            image_uri=$(jq -r '.Code.ImageUri' "$function_file")
-            
-            if [ "$image_uri" != "null" ]; then
-                aws lambda update-function-code \
-                    --function-name "$aws_func" \
-                    --image-uri "$image_uri" \
-                    --region "$AWS_REGION" \
-                    --output table
-                
-                log_info "Rolled back $aws_func to previous version"
-            else
-                log_warning "Could not find previous image URI for $aws_func"
-            fi
-        else
-            log_warning "Backup files not found for $aws_func"
-        fi
-    done
-    
-    log_info "Rollback completed"
-}
 
 # Health check
 health_check() {
@@ -782,8 +836,9 @@ deploy_pipeline() {
     # Validate prerequisites
     validate_prerequisites
     
-    # Create backup
-    backup_lambda_functions
+    # Security check - ensure no public S3 buckets exist
+    check_public_s3_buckets
+    
     
     # Run build pipeline
     build_pipeline
@@ -804,16 +859,14 @@ deploy_pipeline() {
     # TODO fix tests.
     # if [ "$skip_tests" = false ]; then
     #     if ! test_lambda_functions; then
-    #         log_error "Tests failed - initiating rollback"
-    #         rollback_deployment
+    #         log_error "Tests failed after deployment"
     #         exit 1
     #     fi
     # fi
     
     # Health check
     if ! health_check; then
-        log_error "Health check failed - initiating rollback"
-        # rollback_deployment
+        log_error "Health check failed"
         exit 1
     fi
     
@@ -875,7 +928,6 @@ Options:
   --skip-tests          Skip function testing after deployment
   --build-only          Only build and push images, don't deploy
   --deploy-only         Only deploy (assumes images already exist in ECR)
-  --rollback            Rollback to previous deployment
   --health-check        Perform health check only
   --test                Run tests only
   --stack STACK_NAME    Target specific stack (e.g., UltraHuman-AZ-1)
@@ -888,7 +940,6 @@ Examples:
   $0 --build-only       # Only build and push to ECR
   $0 --deploy-only      # Only deploy from existing ECR images
   $0 --skip-tests       # Deploy without running tests
-  $0 --rollback         # Rollback to previous version
   $0 --health-check     # Check current deployment health
   $0 --test             # Run tests on current deployment
   $0 --stack UltraHuman-AZ-1 --health-check  # Check specific stack health
@@ -913,10 +964,12 @@ EOF
             ;;
         build-only)
             validate_prerequisites
+            check_public_s3_buckets
             build_pipeline
             ;;
         deploy-only)
             validate_prerequisites
+            check_public_s3_buckets
             if [ "$deployment_method" = "cdk" ]; then
                 deploy_with_cdk
             else
@@ -924,7 +977,8 @@ EOF
             fi
             ;;
         rollback)
-            rollback_deployment
+            log_error "Rollback functionality has been removed from deploy.sh"
+            exit 1
             ;;
         health-check)
             health_check

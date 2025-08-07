@@ -6,12 +6,12 @@ import logging
 import traceback
 import awswrangler as wr
 import boto3
+import botocore
 from sensorfabric.mdh import MDH
 from ultrahuman.uh import UltrahumanAPI
-from ultrahuman.utils import flatten_json_to_columns, convert_dict_timestamps, validate_sensor_data_schema
-from ultrahuman.error_handling import handle_api_error, RetryableError, NonRetryableError
+from ultrahuman.utils import flatten_json_to_columns, convert_dict_timestamps
+from ultrahuman.error_handling import handle_api_error, RetryableError
 import pandas as pd
-import jsonschema
 import pytz
 
 
@@ -190,101 +190,105 @@ class UltrahumanDataUploader:
             logger.debug("No uh_sync_timestamp found")
 
         record_count = 0
+        # Get DataFrame for this participant and date
         try:
-            # Get DataFrame for this participant and date
-            try:
-                json_obj = self.uh_api.get_metrics(email, target_date)
-            except Exception as e:
-                # Handle UH API errors
-                error_data = {
-                    'participant_id': participant_id,
-                    'email': email,
-                    'target_date': target_date,
-                    'operation': 'uh_api_get_metrics'
-                }
-                handle_api_error(e, error_data, 'uh_api_get_metrics')
-                # If we reach here, it's a non-retryable error that was sent to DLQ
-                return {
-                    'participant_id': participant_id,
-                    'success': False,
-                    'error': f'Non-retryable UH API error: {str(e)}'
-                }
-            # we may want to store the raw json file alongside the parquet files.
-            # pull out UH keys -
-            # response structure is {"data": {"metric_data": [{}]}
-            data = json_obj.get('data', {})
-            if type(data) == list:
-                return {
-                    'participant_id': participant_id,
-                    'success': False,
-                    'error': 'No data found'
-                }
-            metrics_data = data.get('metric_data', [])
-            last_uh_timestamp = 0
-            for metric in metrics_data:
-                metric_type = metric.get('type') if type(metric) == dict else None
-                if type(metric) == dict and 'object_values' in metric and len(metric['object_values']) <= 0:
-                    # empty data.
-                    continue
-                flattened = flatten_json_to_columns(json_data=metric, participant_id=participant_id, fill=True)
-                converted = convert_dict_timestamps(flattened, timezone)
-                # logger.debug(f"Flattened data: {flattened}")
-                logger.debug(f"Converted data: {converted}")
-                # logger.debug(f"Metric type: {metric_type}")
-                # push data into dataframe and then s3 through the wrangler.
-                df = pd.DataFrame.from_dict(converted, orient="columns")
-                if df.empty:
-                    logger.info(f"Empty sensor data: {metric_type}")
-                    continue
-                else:
+            json_obj = self.uh_api.get_metrics(email, target_date)
+        except Exception as e:
+            # Handle UH API errors
+            error_data = {
+                'participant_id': participant_id,
+                'email': email,
+                'target_date': target_date,
+                'operation': 'uh_api_get_metrics'
+            }
+            handle_api_error(e, error_data, 'uh_api_get_metrics')
+            # If we reach here, it's a non-retryable error that was sent to DLQ
+            return {
+                'participant_id': participant_id,
+                'success': False,
+                'error': f'Non-retryable UH API error: {str(e)}'
+            }
+        # we may want to store the raw json file alongside the parquet files.
+        # pull out UH keys -
+        # response structure is {"data": {"metric_data": [{}]}
+        data = json_obj.get('data', {})
+        if type(data) == list:
+            return {
+                'participant_id': participant_id,
+                'success': False,
+                'error': 'No data found'
+            }
+        metrics_data = data.get('metric_data', [])
+        last_uh_timestamp = 0
+        for metric in metrics_data:
+            metric_type = metric.get('type') if type(metric) == dict else None
+            if type(metric) == dict and 'object_values' in metric and len(metric['object_values']) <= 0:
+                # empty data.
+                continue
+            flattened = flatten_json_to_columns(json_data=metric, participant_id=participant_id, fill=True)
+            converted = convert_dict_timestamps(flattened, timezone)
+            # logger.debug(f"Flattened data: {flattened}")
+            logger.debug(f"Converted data: {converted}")
+            # logger.debug(f"Metric type: {metric_type}")
+            # push data into dataframe and then s3 through the wrangler.
+            obj_values_value = converted.get('object_values_value', None)
+            if obj_values_value is None:
+                logger.info(f"Empty sensor data: {metric_type}")
+                continue
+            df = pd.DataFrame.from_dict(converted, orient="columns")
+            if df.empty or 'object_values_timestamp' not in df.columns:
+                logger.info(f"Empty sensor data: {metric_type}")
+                continue
+            else:
+                logger.debug(f"Dataframe columns: {df.columns}")
+                if 'object_values_timestamp' in df.columns:
                     new_uh_timestamp = df['object_values_timestamp'].max()
+                    logger.debug(f"New uh timestamp: {new_uh_timestamp}")
                     if new_uh_timestamp > last_uh_timestamp:
                         last_uh_timestamp = new_uh_timestamp
-                    if uh_sync_timestamp is not None:
-                        df = df[df['object_values_timestamp'] > uh_sync_timestamp]
-                        logger.debug("Removed old timestamp values")
-                    wr.s3.to_parquet(
-                        df=df,
-                        path=f"s3://{self.data_bucket}/raw/dataset/{metric_type}",
-                        dataset=True,
-                        database=self.database_name,
-                        table=metric_type,
-                        s3_additional_kwargs={
-                            'Metadata': {
-                                'participant_id': participant_id,
-                                'participant_email': email,
-                                'data_date': target_date,
-                                'data_type': 'ultrahuman_metrics',
-                                'metric_type': metric_type,
-                                'upload_timestamp': datetime.datetime.now(self.timezone).isoformat(),
-                                'record_count': str(len(df))
-                            }
-                        },
-                        partition_cols=['pid'],
-                        mode='append',
-                    )
-                    record_count += len(df)
+                else:
+                    logger.debug("No object_values_timestamp column")
+                if uh_sync_timestamp is not None and 'object_values_timestamp' in df.columns:
+                    df = df[df['object_values_timestamp'] > uh_sync_timestamp]
+                    logger.debug("Removed old timestamp values")
+                else:
+                    logger.debug("No uh_sync_timestamp found or no object_values_timestamp column")
+                wr.s3.to_parquet(
+                    df=df,
+                    path=f"s3://{self.data_bucket}/raw/dataset/{metric_type}",
+                    dataset=True,
+                    database=self.database_name,
+                    table=metric_type,
+                    s3_additional_kwargs={
+                        'Metadata': {
+                            'participant_id': participant_id,
+                            'participant_email': email,
+                            'data_date': target_date,
+                            'data_type': 'ultrahuman_metrics',
+                            'metric_type': metric_type,
+                            'upload_timestamp': datetime.datetime.now(self.timezone).isoformat(),
+                            'record_count': str(len(df))
+                        }
+                    },
+                    partition_cols=['pid'],
+                    mode='append',
+                )
+                record_count += len(df)
 
             logger.debug(f"Successfully uploaded data for participant {participant_id}")
             if record_count > 0:
                 # Update participant's sync date in MDH
+                logger.debug(f"Updating participant uh_sync_timestamp for {participant_id} to {last_uh_timestamp}...")
                 self._update_participant_sync_date(participant_id, last_uh_timestamp)
+                logger.debug(f"Finished updating participant uh_sync_timestamp for {participant_id} to {last_uh_timestamp}")
             return {
                 'participant_id': participant_id,
                 'success': True,
                 'record_count': record_count,
             }
-            
-        except Exception as e:
-            logger.error(f"Failed to collect/upload data for participant {participant_id}: {str(e)}")
-            return {
-                'participant_id': participant_id,
-                'success': False,
-                'error': str(e)
-            }
 
     def _update_participant_sync_date(self, participant_id: str, last_sync_timestamp: int) -> None:
-        """Update participant's uh_sync_date field in MDH.
+        """Update participant's uh_sync_timestamp field in MDH.
         
         Args:
             participant_id: The participant identifier to update
@@ -296,26 +300,24 @@ class UltrahumanDataUploader:
         if last_sync_timestamp == 0 or last_sync_timestamp is None:
             logger.debug(f'No uh_sync_timestamp found for participant_id: {participant_id}: last_sync_timestamp: {last_sync_timestamp}')
             return
-        last_uh_date = datetime.datetime.fromtimestamp(last_sync_timestamp, datetime.timezone.utc).isoformat()
-
+        last_uh_date = datetime.datetime.fromtimestamp(last_sync_timestamp, datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
         # Update participant's custom field
         update_data = [
             {
-                participant_id : {
-                    'customFields': {
-                        'uh_sync_timestamp': last_uh_date
-                    }
+                'participantIdentifier': participant_id,
+                'customFields': {
+                    'uh_sync_timestamp': last_uh_date
                 }
             }
-        ]
-        
+        ] 
         # Use MDH API to update participant
+        logger.debug(f"[In _update_participant_sync_date] Updating participant uh_sync_timestamp for {participant_id} to {last_sync_timestamp}...")
         try:
             self.mdh.update_participants(update_data)
         except Exception as e:
-            handle_api_error(e, {'operation': 'mdh_update_participants'}, 'update_participant_sync_date')
-
-        logger.debug(f"Updated uh_sync_date for participant {participant_id} to {now.isoformat()}")
+            logger.error(f"[In _update_participant_sync_date] Failed to update uh_sync_timestamp for participant {participant_id}: {str(e)}")
+            return
+        logger.debug(f"[In _update_participant_sync_date] Updated uh_sync_timestamp for participant {participant_id} to {last_sync_timestamp}")
 
     def process_sns_messages(self, sns_records: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
@@ -407,7 +409,7 @@ def get_secret():
     
     try:
         get_secret_value_response = client.get_secret_value(SecretId=secret_name)
-    except ClientError as e:
+    except botocore.exceptions.ClientError as e:
         if e.response['Error']['Code'] == 'ResourceNotFoundException':
             logger.error("The requested secret " + secret_name + " was not found")
         elif e.response['Error']['Code'] == 'InvalidRequestException':
@@ -531,7 +533,7 @@ def lambda_handler(event, context):
 
 
 # Convenience function for local testing
-def test_locally(participant_id: str = "test_participant", email: str = "test@example.com", target_date: Optional[str] = None):
+def test_locally(participant_id: str = "BB-3234-3734", email: str = "agill2560@gmail.com", target_date: Optional[str] = None):
     """
     Function to test the UltraHuman SNS data collection pipeline locally.
     
