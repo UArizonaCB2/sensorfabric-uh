@@ -23,22 +23,22 @@ def setup():
                   workgroup='mdh_export_database_external_prod',
                   s3_location='s3://pep-mdh-export-database-prod/execution/rk_033fa2f7_flinn_study')
 
-    helper = Helper(mdh, amdh, None, 'MDH-6497-9927', date.fromisoformat('2025-04-24'))
+    helper = Helper(mdh, amdh, None, 'MDH-9064-8651', date.fromisoformat('2025-07-10'))
 
     return helper
 
 myhelper = setup()
+topsymptoms = myhelper.topSymptomsRecorded()
+print(topsymptoms)
+exit()
 weight = myhelper.weightSummary()
 print(weight)
-exit()
 bp = myhelper.bloodPressure()
 print(bp)
 ringwear = myhelper.ringWearTime()
 print(ringwear)
 movement = myhelper.movementSummary()
 print(movement)
-symptoms = myhelper.topSymptomsRecorded()
-print(symptoms)
 sleep = myhelper.sleepSummary()
 print(sleep)
 temp = myhelper.temperatureSummary()

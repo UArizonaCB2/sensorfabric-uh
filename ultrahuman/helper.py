@@ -164,7 +164,9 @@ class Helper:
         this_week: pd.DataFrame = self.athena_mdh.execQuery(query_this_week)
         previous_week: pd.DataFrame = self.athena_mdh.execQuery(query_prev_week)
 
-        #this_week = pd.concat([this_week, pd.DataFrame({'systolic':[170], 'diastolic':[10]})])
+        # If we did not get any BP data for this week, we just return none.
+        if this_week.shape[0] <= 0:
+            return None
 
         this_week['systolic'] = pd.to_numeric(this_week['systolic'], errors='coerce')
         this_week['diastolic'] = pd.to_numeric(this_week['diastolic'], errors='coerce')
@@ -247,16 +249,51 @@ class Helper:
             return self._debugOutputs()
 
         query = f"""
-            select value, units from healthkitv2samples
-                where type = 'Weight' and
-                participantidentifier = '{self.participant_id}'
+                with wcurr as (
+                SELECT
+                    CASE units
+                    WHEN 'lb' THEN cast(VALUE AS DOUBLE)
+                    ELSE 2.2 * cast(VALUE AS DOUBLE)
+                    END weight
+                FROM
+                    healthkitv2samples
+                WHERE
+                    TYPE = 'Weight'
+                    AND participantidentifier = '{self.participant_id}'
+                    and cast("date" as date) <= cast('{self.end_date.isoformat()}' as date)
+                    and cast("date" as date) >= cast('{self.end_date.isoformat()}' as date) - interval '6' day
+                ),
+                wprev as (
+                SELECT
+                    CASE units
+                    WHEN 'lb' THEN cast(VALUE AS DOUBLE)
+                    ELSE 2.2 * cast(VALUE AS DOUBLE)
+                    END weight
+                FROM
+                    healthkitv2samples
+                WHERE
+                    TYPE = 'Weight'
+                    AND participantidentifier = 'BB-3234-3734'
+                    and cast("date" as date) <= cast('{self.end_date.isoformat()}' as date) - interval '7' day
+                    and cast("date" as date) >= cast('{self.end_date.isoformat()}' as date) - interval '13' day
+                )
+
+                select floor(avg(wcurr.weight)),
+                        floor(avg(wprev.weight)),
+                        floor(avg(wcurr.weight)) - floor(avg(wprev.weight)) "weight_changed" from wcurr
+                cross join wprev
         """
+
         healthkit = self.athena_mdh.execQuery(query)
-        print(healthkit)
+        change_in_weight = None
+        try:
+            change_in_weight = int(healthkit['weight_changed'][0])
+        except:
+            return None
 
         return {
             # Can return both positive or negative values.
-            'change_in_weight': random.randint(0, 10) - 5,
+            'change_in_weight': change_in_weight
         }
 
     def movementSummary(self):
@@ -270,14 +307,50 @@ class Helper:
 
     def topSymptomsRecorded(self):
         """
-        Get the top 3 symptoms that the users have recorded ordered in the list.
+        Get the top 5 symptoms that the users have recorded ordered in the list.
         If there were no symptoms recorded in the past week this function returns an empty list.
         In case of ties, symptom order is alphabetical.
         """
         if os.getenv('TEMPLATE_MODE', 'PRODUCTION') == 'PRESENT':
             return self._debugOutputs()
 
-        raise ('Function not implemented')
+        query = f"""
+            with r1 as (
+            select cast(observationdate as date) "dates", value "symptom" from projectdevicedata
+                where participantidentifier = '{self.participant_id}'
+                and cast(observationdate as date) <= cast('{self.end_date.isoformat()}' as date)
+                and cast(observationdate as date) >= cast('{self.end_date.isoformat()}' as date) - interval '6' day
+                and type = 'symptom'
+                and value != 'no_symptom'
+            ),
+            r2 as (
+            select symptom, count(*) "total_count", array_agg(distinct(dates)) "days"
+            from r1
+            group by symptom
+            )
+
+            select symptom, total_count, cardinality("days") "days"
+            from r2
+            order by total_count desc
+            limit 5
+        """
+        topsymptoms = self.athena_mdh.execQuery(query)
+
+        if topsymptoms.shape[0] <=0:
+            return None
+
+        # For each symptom name, lets go ahead and replace '_' with ' '
+        tsymptoms = []
+        for name, count, days in zip(topsymptoms['symptom'], topsymptoms['total_count'], topsymptoms['days']):
+            strname = name.replace('_', ' ')
+            strname = strname[0].upper() + strname[1:]
+            tsymptoms.append({
+                'name': strname,
+                'count': count,
+                'days': days,
+            })
+
+        return tsymptoms
 
     def _debugOutputs(self):
         """
@@ -346,4 +419,4 @@ class Helper:
             }
 
         elif calling_function_name == 'topSymptomsRecorded':
-            return ['Headaches', 'Indigestion', 'Nausea']
+            return [{'name':'Headache', count: 4, days:2}, {'name':'Restless Legs', count:3, days: 2}]
