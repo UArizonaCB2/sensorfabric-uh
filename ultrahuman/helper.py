@@ -542,8 +542,8 @@ class Helper:
 
         elif calling_function_name == 'movementSummary':
             return {
-                'total_movements_mins': 120,
-                'average_steps_int': 4200,
+                'total_movements_mins': self._addCommas(120),
+                'average_steps_int': self._addCommas(4200),
                 # Trend can return a positive or negative value.
                 'trend': 5000 - random.randint(4500, 5500),
             }
