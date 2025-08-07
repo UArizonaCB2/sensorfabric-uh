@@ -13,7 +13,7 @@ def setup():
     config = dotenv.dotenv_values('/Users/shravan/Amahealth/mdh-ema/.env')
     mdh = MDH(account_secret=config['RKS_PRIVATE_KEY'],
               account_name=config['RKS_SERVICE_ACCOUNT'],
-              project_id=dev_id)
+              project_id=prod_id)
 
     #participant = mdh.getParticipant('BB-4194-0806')
     #customFields = participant['customFields']
@@ -23,26 +23,34 @@ def setup():
                   workgroup='mdh_export_database_external_prod',
                   s3_location='s3://pep-mdh-export-database-prod/execution/rk_033fa2f7_flinn_study')
 
-    helper = Helper(mdh, amdh, None, 'MDH-9064-8651', date.fromisoformat('2025-07-10'))
+    # Going to create a simple athena connection to connect to all the UH things.
+    auh = athena(database='uh-biobayb-prod',
+                 workgroup='biobayb-uh',
+                 s3_location='s3://uoa-biobayb-uh-dev/results/')
+
+    helper = Helper(mdh, amdh, auh, 'BB-3234-3734', date.fromisoformat('2025-08-05'))
 
     return helper
 
 myhelper = setup()
+
+hr = myhelper.heartRateSummary()
+print(hr)
+exit()
+ringwear = myhelper.ringWearTime()
+print(ringwear)
+temp = myhelper.temperatureSummary()
+print(temp)
 topsymptoms = myhelper.topSymptomsRecorded()
 print(topsymptoms)
-exit()
 weight = myhelper.weightSummary()
 print(weight)
 bp = myhelper.bloodPressure()
 print(bp)
-ringwear = myhelper.ringWearTime()
-print(ringwear)
 movement = myhelper.movementSummary()
 print(movement)
 sleep = myhelper.sleepSummary()
 print(sleep)
-temp = myhelper.temperatureSummary()
-print(temp)
 hr = myhelper.heartRateSummary()
 print(hr)
 nrolled_weeks = myhelper.weeksEnrolled()

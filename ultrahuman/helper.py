@@ -119,7 +119,32 @@ class Helper:
         if os.getenv('TEMPLATE_MODE', 'PRODUCTION') == 'PRESENT':
             return self._debugOutputs()
 
-        raise ('Method not implemented')
+        query = f"""
+            -- Assuming that we get temperature values every 5 weeks, we calculate the wear time based on this
+            -- metric.
+            select
+                    cast(ceil(count(*) * 100 / (288.0 * 7)) as int) "wear_percentage"
+                from temp
+                where pid = '{self.participant_id}'
+                and from_iso8601_timestamp(object_values_timestamp_iso8601_tz) <= date('{self.end_date.isoformat()}')
+                and from_iso8601_timestamp(object_values_timestamp_iso8601_tz) >= date('{self.end_date.isoformat()}') - interval '6' day
+        """
+
+        weartime = self.athena_uh.execQuery(query)
+
+        if weartime.shape[0] <= 0:
+            return None
+
+        wear_percentage = None
+        try:
+            wear_percentage = int(weartime['wear_percentage'][0])
+        except:
+            return None
+
+        return {
+                # Percentage of ring wear time during the week.
+                'ring_wear_percent': wear_percentage
+        }
 
     def emaCompleted(self) -> int:
         """
@@ -211,11 +236,42 @@ class Helper:
     def heartRateSummary(self):
         """
         Get the summary of HR values in the past week.
+        Important - Do no use counts. Since it gives a single HR value every 5 minutes this is not
+        and accurate representation of the total number of beats.
         """
         if os.getenv('TEMPLATE_MODE', 'PRODUCTION') == 'PRESENT':
             return self._debugOutputs()
 
-        raise ('Function not implemented')
+        query = f"""
+            with rhr as (
+            select
+                cast(floor(avg(object_values_value)) as int) avg_rhr
+            from night_rhr
+            where pid = '{self.participant_id}'
+                and from_iso8601_timestamp(object_values_timestamp_iso8601_tz) <= date('{self.end_date.isoformat()}')
+                and from_iso8601_timestamp(object_values_timestamp_iso8601_tz) >= date('{self.end_date.isoformat()}') - interval '6' day
+            ),
+            hrs as (
+                select count(*) "hr_counts"
+                from hr
+            where pid = 'BB-3234-3734'
+                and from_iso8601_timestamp(object_values_timestamp_iso8601_tz) <= date('{self.end_date.isoformat()}')
+                and from_iso8601_timestamp(object_values_timestamp_iso8601_tz) >= date('{self.end_date.isoformat()}') - interval '6' day
+            )
+            select rhr.avg_rhr, hrs.hr_counts
+                from rhr
+            cross join hrs
+        """
+
+        hrsummary = self.athena_uh.execQuery(query)
+
+        if hrsummary.shape[0] <= 0:
+            return None
+
+        return {
+            'hr_counts': None,
+            'avg_rhr': hrsummary['avg_rhr'][0],
+        }
 
     def temperatureSummary(self):
         """
@@ -226,7 +282,60 @@ class Helper:
         if os.getenv('TEMPLATE_MODE', 'PRODUCTION') == 'PRESENT':
             return self._debugOutputs()
 
-        raise ('Function not implemented')
+        query = f"""
+            -- This does not do any outlier removal right now. Just the raw numbers.
+            with wcurr as (
+                select
+                    cast(from_iso8601_timestamp(object_values_timestamp_iso8601_tz) as date) "date",
+                    object_values_value "skin_temp"
+                from temp
+                where pid = '{self.participant_id}'
+                and from_iso8601_timestamp(object_values_timestamp_iso8601_tz) <= date('{self.end_date.isoformat()}')
+                and from_iso8601_timestamp(object_values_timestamp_iso8601_tz) >= date('{self.end_date.isoformat()}') - interval '6' day
+            ),
+            higher as (
+                select count(*) threshold_counts
+                    from wcurr
+                    where (skin_temp + 32) * (9/5) > 100
+            ),
+            wprev as (
+                select
+                    cast(from_iso8601_timestamp(object_values_timestamp_iso8601_tz) as date) "date",
+                    object_values_value "skin_temp"
+                from temp
+                where pid = 'BB-3234-3734'
+                and from_iso8601_timestamp(object_values_timestamp_iso8601_tz) <= date('{self.end_date.isoformat()}') - interval '7' day
+                and from_iso8601_timestamp(object_values_timestamp_iso8601_tz) >= date('{self.end_date.isoformat()}') - interval '13' day
+            ),
+            s as (
+            select avg(wcurr.skin_temp) "curr_avg_temp", count(wcurr.skin_temp) "curr_count",
+                avg(wprev.skin_temp) "prev_avg_temp", count(wprev.skin_temp) "prev_count"
+            from wcurr
+                cross join wprev
+            )
+
+            -- TODO: Find out why adding higher.threshold_counts is breaking the library right now.
+            select *,
+                (curr_avg_temp + 32) * (9/5) "curr_avg_temp_f",
+                case
+                    when curr_avg_temp - prev_avg_temp < 0 then 'lower'
+                    when curr_avg_temp - prev_avg_temp > 0 then 'higher'
+                    else 'steady'
+                end "trend"
+                from s
+                cross join higher
+        """
+
+        temperature = self.athena_uh.execQuery(query)
+
+        if temperature.shape[0] <= 0:
+            return None
+
+        return {
+                'counts': temperature['curr_count'][0],
+                'above_threshold_counts': 0,
+                'trend': self._capFirst(temperature['trend'][0]),
+            }
 
     def sleepSummary(self):
         """
@@ -342,15 +451,20 @@ class Helper:
         # For each symptom name, lets go ahead and replace '_' with ' '
         tsymptoms = []
         for name, count, days in zip(topsymptoms['symptom'], topsymptoms['total_count'], topsymptoms['days']):
-            strname = name.replace('_', ' ')
-            strname = strname[0].upper() + strname[1:]
             tsymptoms.append({
-                'name': strname,
+                'name': self._capFirst(strname),
                 'count': count,
                 'days': days,
             })
 
         return tsymptoms
+
+    def _capFirst(self, value: str) -> str:
+        """Capitalize the first letter of the string"""
+        if len(value) <= 0:
+            return value
+
+        return value[0].upper() + value[min(1, len(value)):]
 
     def _debugOutputs(self):
         """
