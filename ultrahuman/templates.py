@@ -127,7 +127,6 @@ class TemplateGenerator:
         if self.mdh is None:
             self._initialize_connections()
 
-        # participant = self.mdh.getParticipant(participant_id)
         if target_week is None:
             last_week_utc_timestamp = datetime.now()
         else:
@@ -135,7 +134,8 @@ class TemplateGenerator:
             # TODO need to use participant's timezone? not sure.
             last_week_utc_timestamp = datetime.strptime(target_week, '%Y-%m-%d')
 
-        helper = Helper(mdh=self.mdh, athena_mdh=None, athena_uh=None, participant_id=participant_id, end_date=last_week_utc_timestamp)
+        helper = Helper(mdh=self.mdh, athena_mdh=None, athena_uh=None,
+                        participant_id=participant_id, end_date=last_week_utc_timestamp)
 
         ringwear = helper.ringWearTime()
         weight = helper.weightSummary()
@@ -154,27 +154,18 @@ class TemplateGenerator:
         template = env.get_template('reportv2.html')
 
         data = dict(
+            ringwear=ringwear,
             weeks_enrolled=weeks_enrolled,
             current_pregnancy_week=ga_weeks,
-            ring_wear_percentage=ringwear['ring_wear_percent'],
             surveys_completed=ema_count,
             symptoms=symptoms,
-            bp_count=bp['counts'],
-            bp_trend=bp['trend'],
-            bp_high_readings=bp['above_threshold_counts'],
-            temp_count=temp['counts'],
-            temp_trend=temp['trend'],
-            temp_high_readings=temp['above_threshold_counts'],
-            heart_rate_total_beats=hr['hr_counts'],
-            heart_rate_avg_resting=hr['avg_rhr'],
-            enrolled_date=enrolled_date,
-            sleep_total_hours=sleep['hours'],
-            sleep_avg_per_night=sleep['average_per_night'],
-            movement_total_minutes=movement['total_movements_mins'],
-            movement_avg_steps_per_day=movement['average_steps_int'],
-            movement_step_trend=movement['trend'],
-            weight_change=weight['change_in_weight'],
-            # enabled flags
+            weight=weight,
+            movement=movement,
+            sleep=sleep,
+            temp=temp,
+            hr=hr,
+            bp=bp,
+            # enabled flags (not currently used. Passing None to metrics disables them)
             blood_pressure_enabled=True,
             heart_rate_enabled=True,
             temperature_enabled=True,
@@ -256,7 +247,7 @@ def lambda_handler(event, context):
 
         # Extract JWT token - handle both HTTP and direct invocation
         jwt_token = None
-        
+
         # Check if this is an HTTP request (Function URL)
         logger.debug(f"Event: {json.dumps(event)}")
         if 'queryStringParameters' in event and event['queryStringParameters']:

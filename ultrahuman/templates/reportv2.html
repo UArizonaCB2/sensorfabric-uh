@@ -399,22 +399,23 @@
                     <p>For the week of July 28 - August 3, 2025</p>
                 </div>
                 <div class="summary-metrics">
-                    <div class="metric-item">
+                    {% if current_pregnancy_week is not none %}<div class="metric-item">
                         <p class="summary-number" data-value="{{current_pregnancy_week}}">{{current_pregnancy_week}}</p>
                         <p class="summary-label">Weeks Pregnant</p>
-                    </div>
-                    <div class="metric-item">
-                        <p class="summary-number" data-value="{{ring_wear_percentage}}">{{ring_wear_percentage}}<span class="unit">%</span></p>
+                    </div>{% endif %}
+                    {% if ringwear is not none %}<div class="metric-item">
+                        <p class="summary-number" data-value="{{ringwear.ring_wear_percent}}">{{ringwear.ring_wear_percent}}<span class="unit">%</span></p>
                         <p class="summary-label">Ring Wear Time</p>
-                    </div>
-                    <div class="metric-item">
+                    </div>{% endif %}
+                    {% if surveys_completed is not none %}<div class="metric-item">
                         <p class="summary-number" data-value="{{surveys_completed}}">{{surveys_completed}}</p>
                         <p class="summary-label">Check-in's Completed</p>
-                    </div>
+                    </div>{% endif %}
                 </div>
             </div>
 
             <!-- Sleep Card -->
+            {% if sleep is not none %}
             <div class="report-card">
                 <div class="card-header">
                     <div class="icon icon-sleep">
@@ -423,12 +424,14 @@
                     <h2>Avg. Sleep</h2>
                 </div>
                 <div class="card-body">
-                    <p class="primary-metric">{{sleep_avg_per_night}}<span class="unit">hrs</span></p>
-                    <p class="secondary-text">{{sleep_total_hours}} hours this week</p>
+                    <p class="primary-metric">{{sleep.hours}}<span class="unit">hrs</span></p>
+                    <p class="secondary-text">{{sleep.average_per_night}} hours this week</p>
                 </div>
             </div>
+            {% endif %}
 
             <!-- Heart Rate Card -->
+            {% if hr is not none %}
             <div class="report-card">
                 <div class="card-header">
                     <div class="icon icon-heart">
@@ -437,12 +440,13 @@
                     <h2>Resting Heart Rate</h2>
                 </div>
                 <div class="card-body">
-                    <p class="primary-metric">{{heart_rate_avg_resting}}<span class="unit">bpm</span></p>
-                    <p class="secondary-text">{{heart_rate_total_beats}} beats this week</p>
+                    <p class="primary-metric">{{hr.avg_rhr}}<span class="unit">bpm</span></p>
                 </div>
             </div>
+            {% endif %}
 
             <!-- Movement Card -->
+            {% if movement is not none %}
             <div class="report-card">
                 <div class="card-header">
                     <div class="icon icon-movement">
@@ -451,13 +455,15 @@
                     <h2>Avg. Steps</h2>
                 </div>
                 <div class="card-body">
-                    <p class="primary-metric">{{movement_avg_steps_per_day}}</p>
-                    <p class="secondary-text">{{movement_total_minutes}} total minutes</p>
-                    <p class="trend negative">{{movement_step_trend}} steps than last week</p>
+                    <p class="primary-metric">{{movement.average_steps_int}}</p>
+                    <p class="secondary-text">{{movement.total_movement_mins}} total minutes</p>
+                    <p class="trend negative">{{movement.trend}} steps than last week</p>
                 </div>
             </div>
+            {% endif %}
 
             <!-- Blood Pressure Card -->
+            {% if bp is not none %}
             <div class="report-card">
                 <div class="card-header">
                     <div class="icon icon-blood">
@@ -466,13 +472,23 @@
                     <h2>Blood Pressure</h2>
                 </div>
                 <div class="card-body">
-                     <p class="primary-metric">{{bp_count}}<span class="unit">readings</span></p>
-                     <p class="secondary-text">{{bp_high_readings}} over 140/90</p>
-                     <p class="trend">{{bp_trend}} than last week</p>
+                     <p class="primary-metric">{{ bp.counts }}<span class="unit">
+                             {% if bp.bp_counts == 1 %}
+                             reading
+                             {% else %}
+                             readings
+                             {% endif %}
+                     </span></p>
+                     <p class="secondary-text">{{bp.above_threshold_counts}} over 140/90</p>
+                     {% if bp.trend is not none %}
+                     <p class="trend">{{bp.trend}} compared to last week</p>
+                     {% endif %}
                 </div>
             </div>
+            {% endif %}
 
             <!-- Temperature Card -->
+            {% if temp is not none %}
             <div class="report-card">
                 <div class="card-header">
                     <div class="icon icon-temp">
@@ -481,13 +497,17 @@
                     <h2>Temperature</h2>
                 </div>
                 <div class="card-body">
-                    <p class="primary-metric">{{temp_trend}}</p>
-                    <p class="secondary-text">{{temp_high_readings}} readings over 100.0°F</p>
-                    <p class="trend neutral">{{temp_count}} total readings</p>
+                    <p class="primary-metric">{{temp.trend}}</p>
+                    <p class="secondary-text">{{temp.above_threshold_counts}} readings over 100.0°F</p>
+                    {% if temp.trend is not none %}
+                    <p class="trend neutral">{{temp.counts}} total readings</p>
+                    {% endif %}
                 </div>
             </div>
+            {% endif %}
 
             <!-- Weight Card -->
+            {% if weight is not none %}
             <div class="report-card">
                 <div class="card-header">
                     <div class="icon icon-weight">
@@ -496,36 +516,43 @@
                     <h2>Weight Change</h2>
                 </div>
                 <div class="card-body">
-                    <p class="primary-metric">{{weight_change}}<span class="unit">lbs</span></p>
+                    <p class="primary-metric">{{weight.change_in_weight}}<span class="unit">lbs</span></p>
                     <p class="secondary-text">This week</p>
                 </div>
             </div>
+            {% endif %}
 
             <!-- Symptoms Card - Full Width -->
+            {% if symptoms is not none %}
             <div class="report-card symptoms-highlight-card">
                 <div class="card-header">
                     <h2>Top Symptoms</h2>
                 </div>
                 <div class="summary-metrics">
+                    {% for symptom in symptoms %}
                     <div class="metric-item">
-                        <p class="summary-number" data-value="6">6<span class="unit"> days</span></p>
-                        <p class="summary-label">Back Pain</p>
+                        <p class="summary-number" data-value="{{ symptom.days }}">{{ symptom.count }}
+                            <span class="unit">
+                                {# Add a simple check for singular vs. plural. #}
+                                {% if symptom.days == 1 %}
+                                day
+                                {% else %}
+                                days
+                                {% endif %}
+                            </span>
+                        </p>
+                        {# Access the 'name' value from the dictionary. #}
+                        <p class="summary-label">{{ symptom.name }}</p>
                     </div>
+                    {% else %}
+                    {# This optional block will be displayed if the 'symptoms' list is empty. #}
                     <div class="metric-item">
-                        <p class="summary-number" data-value="4">4<span class="unit"> days</span></p>
-                        <p class="summary-label">Indigestion</p>
+                        <p class="summary-label">No symptoms were reported.</p>
                     </div>
-                    <div class="metric-item">
-                        <p class="summary-number" data-value="3">3<span class="unit"> days</span></p>
-                        <p class="summary-label">Nausea</p>
-                    </div>
-                     <div class="metric-item">
-                        <p class="summary-number" data-value="1">1<span class="unit"> day</span></p>
-                        <p class="summary-label">Headache</p>
-                    </div>
+                    {% endfor %}
                 </div>
             </div>
-
+            {% endif %}
         </div>
     </div>
 

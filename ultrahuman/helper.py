@@ -138,6 +138,9 @@ class Helper:
         wear_percentage = None
         try:
             wear_percentage = int(weartime['wear_percentage'][0])
+            # If somehow the wear percentage is above 100, we will restrict it to 100
+            if wear_percentage > 100:
+                wear_percentage = 100
         except:
             return None
 
@@ -211,7 +214,7 @@ class Helper:
                     continue
 
         # Not always gaurenteed that we will have data for this week and the past.
-        trend = 'None'
+        trend = None
         if this_week.shape[0] > 0 and previous_week.shape[0] > 0:
             sys_curr = this_week['systolic'].mean()
             dia_curr = this_week['diastolic'].mean()
@@ -335,7 +338,7 @@ class Helper:
                 'counts': temperature['curr_count'][0],
                 'above_threshold_counts': 0,
                 'trend': self._capFirst(temperature['trend'][0]),
-            }
+        }
 
     def sleepSummary(self):
         """
@@ -440,7 +443,7 @@ class Helper:
 
             select symptom, total_count, cardinality("days") "days"
             from r2
-            order by total_count desc
+            order by days desc
             limit 5
         """
         topsymptoms = self.athena_mdh.execQuery(query)
@@ -489,7 +492,7 @@ class Helper:
         if calling_function_name == 'ringWearTime':
             return {
                 # Percentage of ring wear time during the week.
-                'ring_wear_percent': 97,
+                'ring_wear_percent': 65,
             }
 
         elif calling_function_name == 'bloodPressure':
@@ -533,4 +536,5 @@ class Helper:
             }
 
         elif calling_function_name == 'topSymptomsRecorded':
-            return [{'name':'Headache', count: 4, days:2}, {'name':'Restless Legs', count:3, days: 2}]
+            return [{'name':'Headache',  'count': 4, 'days':4},
+                    {'name':'Restless Legs', 'count':3, 'days': 2}]
