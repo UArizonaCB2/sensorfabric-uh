@@ -4,6 +4,7 @@ import datetime
 from typing import Dict, List, Any, Optional
 import logging
 import traceback
+import copy
 import awswrangler as wr
 import boto3
 import botocore
@@ -110,6 +111,74 @@ class UltrahumanDataUploader:
 
         logger.debug(f"Collecting data for date: {self.target_date}")
 
+    def _process_metric_data(self, metric: Dict[str, Any], participant_id: str, email: str, 
+                           target_date: str, timezone: str, uh_sync_timestamp: Optional[int]) -> Dict[str, Any]:
+        """Process a single metric's data and upload to S3.
+
+        Args:
+            metric: Single metric data from UH API
+            participant_id: Participant identifier
+            email: Participant email
+            target_date: Target date for data collection
+            timezone: Participant timezone
+            uh_sync_timestamp: Last sync timestamp to filter data
+
+        Returns:
+            Dict with processing results including record count and max timestamp
+        """
+        metric_type = metric.get('type') if isinstance(metric, dict) else None
+        if not metric_type:
+            logger.info(f"Empty metric data: {metric_type}")
+            logger.debug(f"Empty metric data: {metric}")
+            return {'record_count': 0, 'max_timestamp': 0}
+
+        flattened = flatten_json_to_columns(json_data=metric, participant_id=participant_id, fill=True)
+        converted = convert_dict_timestamps(flattened, timezone)
+        logger.debug(f"Converted data: {converted}")
+
+        df = pd.DataFrame.from_dict(converted, orient="columns")
+        if df.empty or len(df) == 0:
+            logger.info(f"Empty sensor data: {metric_type}")
+            return {'record_count': 0, 'max_timestamp': 0}
+
+        logger.debug(f"Dataframe columns: {df.columns}")
+        max_timestamp = 0
+
+        if 'object_values_timestamp' in df.columns:
+            max_timestamp = df['object_values_timestamp'].max()
+            logger.debug(f"New uh timestamp: {max_timestamp}")
+
+        if uh_sync_timestamp is not None and 'object_values_timestamp' in df.columns:
+            df = df[df['object_values_timestamp'] > uh_sync_timestamp]
+            logger.debug("Removed old timestamp values")
+
+        if df.empty:
+            logger.info(f"No new data after timestamp filtering: {metric_type}")
+            return {'record_count': 0, 'max_timestamp': max_timestamp}
+
+        wr.s3.to_parquet(
+            df=df,
+            path=f"s3://{self.data_bucket}/raw/dataset/{metric_type}",
+            dataset=True,
+            database=self.database_name,
+            table=metric_type,
+            s3_additional_kwargs={
+                'Metadata': {
+                    'participant_id': participant_id,
+                    'participant_email': email,
+                    'data_date': target_date,
+                    'data_type': 'ultrahuman_metrics',
+                    'metric_type': metric_type,
+                    'upload_timestamp': datetime.datetime.now(self.timezone).isoformat(),
+                    'record_count': str(len(df))
+                }
+            },
+            partition_cols=['pid'],
+            mode='append',
+        )
+
+        return {'record_count': len(df), 'max_timestamp': max_timestamp}
+
     def _process_sns_message(self, sns_message: Dict[str, Any]) -> Dict[str, Any]:
         """Process SNS message to extract participant data.
         
@@ -130,7 +199,7 @@ class UltrahumanDataUploader:
             participant_id = message_body.get('participant_id')
             email = message_body.get('email')
             target_date = message_body.get('target_date')
-            
+
             # Validate required fields
             if not participant_id:
                 raise ValueError("Missing required field: participant_id")
@@ -138,7 +207,7 @@ class UltrahumanDataUploader:
                 raise ValueError("Missing required field: email")
             if not target_date:
                 raise ValueError("Missing required field: target_date")
-            
+
             # Extract optional fields with defaults
             timezone = message_body.get('timezone', DEFAULT_TIMEZONE)
             custom_fields = message_body.get('custom_fields', {})
@@ -174,7 +243,7 @@ class UltrahumanDataUploader:
         if 'uh_email' in participant and participant.get('uh_email') is not None and participant.get('uh_email') != '':
             email = participant.get('uh_email')
         timezone = demographics.get('timeZone', DEFAULT_TIMEZONE)
-        
+
         # Use target_date from SNS message if available, otherwise use instance target_date
         target_date = participant.get('target_date', self.target_date)
         logger.debug(f"Collecting data for participant {participant_id} on {target_date}")
@@ -220,72 +289,45 @@ class UltrahumanDataUploader:
             }
         metrics_data = data.get('metric_data', [])
         last_uh_timestamp = 0
-        for metric in metrics_data:
-            metric_type = metric.get('type') if type(metric) == dict else None
-            if type(metric) == dict and 'object_values' in metric and len(metric['object_values']) <= 0:
-                # empty data.
-                continue
-            flattened = flatten_json_to_columns(json_data=metric, participant_id=participant_id, fill=True)
-            converted = convert_dict_timestamps(flattened, timezone)
-            # logger.debug(f"Flattened data: {flattened}")
-            logger.debug(f"Converted data: {converted}")
-            # logger.debug(f"Metric type: {metric_type}")
-            # push data into dataframe and then s3 through the wrangler.
-            obj_values_value = converted.get('object_values_value', None)
-            if obj_values_value is None:
-                logger.info(f"Empty sensor data: {metric_type}")
-                continue
-            df = pd.DataFrame.from_dict(converted, orient="columns")
-            if df.empty or 'object_values_timestamp' not in df.columns:
-                logger.info(f"Empty sensor data: {metric_type}")
-                continue
-            else:
-                logger.debug(f"Dataframe columns: {df.columns}")
-                if 'object_values_timestamp' in df.columns:
-                    new_uh_timestamp = df['object_values_timestamp'].max()
-                    logger.debug(f"New uh timestamp: {new_uh_timestamp}")
-                    if new_uh_timestamp > last_uh_timestamp:
-                        last_uh_timestamp = new_uh_timestamp
-                else:
-                    logger.debug("No object_values_timestamp column")
-                if uh_sync_timestamp is not None and 'object_values_timestamp' in df.columns:
-                    df = df[df['object_values_timestamp'] > uh_sync_timestamp]
-                    logger.debug("Removed old timestamp values")
-                else:
-                    logger.debug("No uh_sync_timestamp found or no object_values_timestamp column")
-                wr.s3.to_parquet(
-                    df=df,
-                    path=f"s3://{self.data_bucket}/raw/dataset/{metric_type}",
-                    dataset=True,
-                    database=self.database_name,
-                    table=metric_type,
-                    s3_additional_kwargs={
-                        'Metadata': {
-                            'participant_id': participant_id,
-                            'participant_email': email,
-                            'data_date': target_date,
-                            'data_type': 'ultrahuman_metrics',
-                            'metric_type': metric_type,
-                            'upload_timestamp': datetime.datetime.now(self.timezone).isoformat(),
-                            'record_count': str(len(df))
-                        }
-                    },
-                    partition_cols=['pid'],
-                    mode='append',
-                )
-                record_count += len(df)
 
-            logger.debug(f"Successfully uploaded data for participant {participant_id}")
-            if record_count > 0:
-                # Update participant's sync date in MDH
-                logger.debug(f"Updating participant uh_sync_timestamp for {participant_id} to {last_uh_timestamp}...")
-                self._update_participant_sync_date(participant_id, last_uh_timestamp)
-                logger.debug(f"Finished updating participant uh_sync_timestamp for {participant_id} to {last_uh_timestamp}")
-            return {
-                'participant_id': participant_id,
-                'success': True,
-                'record_count': record_count,
-            }
+        for metric in metrics_data:
+            metric_type = metric.get('type') if isinstance(metric, dict) else None
+            if not metric_type:
+                continue
+
+            # Process Sleep metrics with special handling for embedded sub-metrics
+            if metric_type == 'Sleep':
+                logger.debug(f"Processing Sleep metric.")
+                sleep_obj = metric.get('object')
+                for obj in sleep_obj.items():
+                    newObj = {'type': obj[0], 'object': copy.deepcopy(obj[1])}
+                    result = self._process_metric_data(newObj, participant_id, email, target_date, timezone, uh_sync_timestamp)
+                    record_count += result['record_count']
+                    if result['max_timestamp'] > last_uh_timestamp:
+                        last_uh_timestamp = result['max_timestamp']
+                    logger.debug(f"Processed {newObj['type']}: {result['record_count']} records, max_timestamp: {result['max_timestamp']}")
+            else:
+                # Process standard metrics
+                result = self._process_metric_data(metric, participant_id, email, target_date, timezone, uh_sync_timestamp)
+                # Update record count and timestamp tracking
+                record_count += result['record_count']
+                if result['max_timestamp'] > last_uh_timestamp:
+                    last_uh_timestamp = result['max_timestamp']
+
+            logger.debug(f"Processed {metric_type}: {result['record_count']} records, max_timestamp: {result['max_timestamp']}")
+
+        logger.debug(f"Successfully uploaded data for participant {participant_id}")
+        if record_count > 0:
+            # Update participant's sync date in MDH
+            logger.debug(f"Updating participant uh_sync_timestamp for {participant_id} to {last_uh_timestamp}...")
+            self._update_participant_sync_date(participant_id, last_uh_timestamp)
+            logger.debug(f"Finished updating participant uh_sync_timestamp for {participant_id} to {last_uh_timestamp}")
+
+        return {
+            'participant_id': participant_id,
+            'success': True,
+            'record_count': record_count,
+        }
 
     def _update_participant_sync_date(self, participant_id: str, last_sync_timestamp: int) -> None:
         """Update participant's uh_sync_timestamp field in MDH.
