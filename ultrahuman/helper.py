@@ -231,7 +231,7 @@ class Helper:
                 trend = 'Lower'
 
         return {
-                'counts': this_week.shape[0],
+                'counts': self._addCommas(this_week.shape[0]),
                 'above_threshold_counts': high_values,
                 'trend': trend,
         }
@@ -335,7 +335,7 @@ class Helper:
             return None
 
         return {
-                'counts': temperature['curr_count'][0],
+                'counts': self._addCommas(temperature['curr_count'][0]),
                 'above_threshold_counts': 0,
                 'trend': self._capFirst(temperature['trend'][0]),
         }
@@ -469,6 +469,19 @@ class Helper:
 
         return value[0].upper() + value[min(1, len(value)):]
 
+    def _addCommas(self, value: int) -> str:
+        """Add commas in the correct place integer passed and then return a string for it."""
+        buff: str = str(value)
+        buff = buff[::-1]
+        cbuff = ""
+        for i in range(0, len(buff)):
+            cbuff = cbuff + buff[i]
+            if (i+1) % 3 == 0:
+                cbuff = cbuff + ','
+        cbuff = cbuff[::-1]
+
+        return cbuff
+
     def _debugOutputs(self):
         """
         This method is is used to simulate the behavior of this library until all sensor data
@@ -510,7 +523,7 @@ class Helper:
 
         elif calling_function_name == 'temperatureSummary':
             return {
-                'counts': 12103,
+                'counts': self._addCommas(12103),
                 'above_threshold_counts': 3,
                 'trend': trends[random.randint(0, len(trends)-1)],
             }
