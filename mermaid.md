@@ -1,6 +1,7 @@
 graph TB
       %% External Systems
       EB[EventBridge Rule Daily at 7:00 AM UTC]
+      EB_JWT[EventBridge Rule Weekly Sundays at Midnight UTC-7]
       UH_API[UltraHuman API]
       MDH[(MDH Database)]
       USER[User/Browser]
@@ -19,6 +20,7 @@ graph TB
       PUBLISHER[Lambda: biobayb_uh_publisher Fetches participants & publishes SNS]
       UPLOADER[Lambda: biobayb_uh_uploader Collects & uploads UH data]
       TEMPLATE[Lambda: biobayb_uh_template_generator Generates weekly reports]
+      JWT_GEN[Lambda: biobayb_uh_jwt_generator Generates JWT tokens]
 
       %% Data Flow
       EB -->|"Triggers daily"| PUBLISHER
@@ -29,8 +31,11 @@ graph TB
       UPLOADER -->|"Stores parquet files"| S3
       UPLOADER -->|"Updates sync timestamps"| MDH
       UPLOADER -->|"Queries participant data"| MDH
-      %% Template Generation (Function URL)
-      USER -->|"HTTP request with token"| TEMPLATE
+      %% JWT Generation & Template Access
+      EB_JWT -->|"Triggers weekly"| JWT_GEN
+      JWT_GEN -->|"Generates & stores JWT"| MDH
+      USER -->|"HTTP request with JWT token"| TEMPLATE
+      TEMPLATE -->|"Validates JWT"| MDH
       TEMPLATE -->|"Reads data"| S3
       TEMPLATE -->|"Returns report"| USER
 
@@ -38,10 +43,12 @@ graph TB
       ECR -.->|"Shared Docker image"| PUBLISHER
       ECR -.->|"Shared Docker image"| UPLOADER
       ECR -.->|"Shared Docker image"| TEMPLATE
+      ECR -.->|"Shared Docker image"| JWT_GEN
 
       SM -.->|"API credentials"| PUBLISHER
       SM -.->|"API credentials"| UPLOADER
-      SM -.->|"API credentials"| TEMPLATE
+      SM -.->|"API credentials & JWT secret"| TEMPLATE
+      SM -.->|"JWT secret"| JWT_GEN
 
       %% Error Handling
       PUBLISHER -->|"Failed messages"| DLQ
@@ -51,6 +58,7 @@ graph TB
       PUBLISHER -.->|"Logs"| CW
       UPLOADER -.->|"Logs"| CW
       TEMPLATE -.->|"Logs"| CW
+      JWT_GEN -.->|"Logs"| CW
 
       %% Styling
       classDef lambda fill:#ff9900,stroke:#000,stroke-width:2px,color:#000
@@ -59,8 +67,8 @@ graph TB
       classDef external fill:#2ecc71,stroke:#000,stroke-width:2px,color:#000
       classDef infra fill:#9b59b6,stroke:#000,stroke-width:2px,color:#fff
 
-      class PUBLISHER,UPLOADER,TEMPLATE lambda
+      class PUBLISHER,UPLOADER,TEMPLATE,JWT_GEN lambda
       class S3,MDH,ECR storage
       class SNS,DLQ messaging
-      class EB,UH_API,USER external
+      class EB,EB_JWT,UH_API,USER external
       class SM,CW infra
