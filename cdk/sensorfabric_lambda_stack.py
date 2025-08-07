@@ -126,6 +126,16 @@ class SensorFabricLambdaStack(Stack):
                     "AWS_SECRET_NAME": self.config.aws_secret_name,
                     "TEMPLATE_MODE": self.config.template_mode
                 }
+            },
+            "biobayb_uh_jwt_generator": {
+                "description": "UltraHuman JWT token generator Lambda function",
+                "handler": "ultrahuman.uh_jwt_generator.lambda_handler",
+                "timeout": Duration.minutes(10),
+                "memory_size": 2048,
+                "environment": {
+                    "AWS_SECRET_NAME": self.config.aws_secret_name,
+                    "JWT_EXPIRATION_DAYS": "30"
+                }
             }
         }
 
@@ -274,6 +284,24 @@ class SensorFabricLambdaStack(Stack):
 
             self.lambda_functions[function_name] = lambda_function
 
+            # Add Function URL for template generator
+            if function_name == "biobayb_uh_template_generator":
+                function_url = lambda_function.add_function_url(
+                    auth_type=lambda_.FunctionUrlAuthType.NONE,
+                    cors=lambda_.FunctionUrlCorsOptions(
+                        allowed_origins=["*"],
+                        allowed_methods=[lambda_.HttpMethod.GET],
+                        allowed_headers=["*"]
+                    )
+                )
+                
+                # Output the Function URL
+                cdk.CfnOutput(
+                    self, f"{self.config.project_name}_{function_name}_FunctionURL",
+                    value=function_url.url,
+                    description=f"Function URL for {self.config.project_name}_{function_name} Lambda function"
+                )
+
             # Output the Lambda function ARN
             cdk.CfnOutput(
                 self, f"{self.config.project_name}_{function_name}_Lambda_ARN",
@@ -401,6 +429,22 @@ class SensorFabricLambdaStack(Stack):
             
             uploader_rule.add_target(
                 targets.LambdaFunction(self.lambda_aliases["biobayb_uh_uploader"])
+            )
+
+        # Manual trigger capability for JWT generator
+        if "biobayb_uh_jwt_generator" in self.lambda_aliases:
+            # This creates a custom event pattern that can be triggered manually
+            jwt_generator_rule = events.Rule(
+                self, f"{self.config.project_name}_UHJWTGeneratorManualTriggerRule",
+                description="Manual trigger for UltraHuman JWT generator",
+                event_pattern=events.EventPattern(
+                    source=["sensorfabric.manual"],
+                    detail_type=["UltraHuman JWT Generation Request"]
+                )
+            )
+            
+            jwt_generator_rule.add_target(
+                targets.LambdaFunction(self.lambda_aliases["biobayb_uh_jwt_generator"])
             )
 
     def update_lambda_environment_variables(self) -> None:
