@@ -325,7 +325,7 @@ class UltrahumanDataUploader:
             logger.debug(f"Processed {metric_type}: {result['record_count']} records, max_timestamp: {result['max_timestamp']}")
 
         logger.debug(f"Successfully uploaded data for participant {participant_id}")
-        if record_count > 0:
+        if record_count > 0 and not self.dry_run:
             # Update participant's sync date in MDH
             logger.debug(f"Updating participant uh_sync_timestamp for {participant_id} to {last_uh_timestamp}...")
             self._update_participant_sync_date(participant_id, last_uh_timestamp)
