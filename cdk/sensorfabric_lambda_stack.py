@@ -134,7 +134,7 @@ class SensorFabricLambdaStack(Stack):
                 "memory_size": 2048,
                 "environment": {
                     "AWS_SECRET_NAME": self.config.aws_secret_name,
-                    "JWT_EXPIRATION_DAYS": "30"
+                    "JWT_EXPIRATION_DAYS": "14"
                 }
             }
         }

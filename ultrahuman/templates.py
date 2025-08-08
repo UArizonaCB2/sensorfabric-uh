@@ -1,5 +1,5 @@
 from jinja2 import Environment, FileSystemLoader
-from datetime import datetime
+import datetime
 from typing import Dict, List, Any, Optional
 import json
 import logging
@@ -128,15 +128,21 @@ class TemplateGenerator:
             self._initialize_connections()
 
         if target_week is None:
-            last_week_utc_timestamp = datetime.now()
+            last_week_utc_timestamp = datetime.datetime.now()
         else:
             # TODO make target_week processing more robust.
             # TODO need to use participant's timezone? not sure.
-            last_week_utc_timestamp = datetime.strptime(target_week, '%Y-%m-%d')
+            last_week_utc_timestamp = datetime.datetime.strptime(target_week, '%Y-%m-%d')
 
-        helper = Helper(mdh=self.mdh, athena_mdh=None, athena_uh=None,
-                        participant_id=participant_id, end_date=last_week_utc_timestamp)
-
+        config = {
+            'MDH_SECRET_KEY': self.__config.get('MDH_SECRET_KEY'),
+            'MDH_ACCOUNT_NAME': self.__config.get('MDH_ACCOUNT_NAME'),
+            'MDH_PROJECT_ID': self.__config.get('MDH_PROJECT_ID'),
+            'participant_id': participant_id,
+            'end_date': last_week_utc_timestamp,
+            'start_date': last_week_utc_timestamp - datetime.timedelta(days=7)
+        }
+        helper = Helper(config=config)
         ringwear = helper.ringWearTime()
         weight = helper.weightSummary()
         movement = helper.movementSummary()
@@ -148,9 +154,8 @@ class TemplateGenerator:
         weeks_enrolled = helper.weeksEnrolled()
         ga_weeks = helper.weeksPregnant()
         ema_count = helper.emaCompleted()
-        enrolled_date = helper.enrolledDate()
 
-        env = Environment(loader=FileSystemLoader('templates'))
+        env = Environment(loader=FileSystemLoader('ultrahuman/templates'))
         template = env.get_template('reportv2.html')
 
         data = dict(
@@ -172,7 +177,7 @@ class TemplateGenerator:
             sleep_enabled=True,
             weight_enabled=True,
             movement_enabled=True,
-            report_date=datetime.now().strftime("%Y-%m-%d %H:%M")
+            report_date=datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
         )
 
         html = template.render(data)
@@ -268,6 +273,7 @@ def lambda_handler(event, context):
         try:
             # Validate JWT token and extract parameters
             payload = generator._validate_jwt_token(jwt_token)
+            logger.debug(f"Got payload: {payload}")
             participant_id = payload['participant_id']
             target_date = payload.get('end_date')  # Use end_date as target_week
             
@@ -313,4 +319,3 @@ def lambda_handler(event, context):
                 'Content-Type': 'application/json'
             }
         }
-

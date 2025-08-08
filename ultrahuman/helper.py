@@ -1,11 +1,12 @@
 from sensorfabric.mdh import MDH
 from sensorfabric.athena import athena
 import pandas as pd
-from datetime import datetime, timezone, date, timedelta
+import datetime
 import math
 import inspect
 import os
 import random
+from typing import Dict, Any, Optional
 
 """
 Current Limitations
@@ -18,23 +19,23 @@ class ParticipantNotEnrolled(Exception):
     """Raised when the participant is not enrolled in the study."""
     pass
 
+
 class Helper:
     """ Helper class for reporting template"""
-    def __init__(self, mdh: MDH,
-                 athena_mdh: athena,
-                 athena_uh: athena,
-                 participant_id: str,
-                 end_date: date):
+    def __init__(self, config: Dict[str, Any]):
         """
         Paramters
         ---------
-        1. mdh (sensorfabric.mdh.MDH) - A sensorfabric MDH object.
-        2. athena_mdh (sensorfabric.athena.athena) - Athena connection to MDH backend.
-        3. athena_uh (sensorfabric.athena.athena) - Athena connection to our AWS UH backend.
-        4. participant_id (string) - Participant ID for which the report is being
-           created.
-        5. end_date (date) - Last date (inclusive) of the week you want to use for calculating the
-            reporting metrics.
+        1. config (Dict[str, Any]) - Configuration dictionary containing the following keys:
+            - MDH_SECRET_KEY: MDH secret key
+            - MDH_ACCOUNT_NAME: MDH account name
+            - MDH_PROJECT_ID: MDH project ID
+            - UH_SECRET_KEY: UH secret key
+            - UH_ACCOUNT_NAME: UH account name
+            - UH_PROJECT_ID: UH project ID
+            - participant_id: Participant ID
+            - end_date: End date of the week
+            - start_date: Start date of the week
 
         Returns
         -------
@@ -44,29 +45,40 @@ class Helper:
         -----
         ParticipantNotEnrolled - If the participant status is not enrolled
         """
-        self.mdh: MDH = mdh
-        self.athena_mdh = athena_mdh
-        self.athena_uh = athena_uh
-        self.participant_id: str = participant_id
-        self.end_date: date = end_date
-        # Weeks are assumed to be inclusive of start and end dates. If the end date is a Sat,
-        # the start date will be the Sun previous to it. Hence 6 and not 7.
-        self.start_date: date = end_date - timedelta(days=6)
+        self.__config = config
+        mdh_configuration = {
+            'account_secret': self.__config.get('MDH_SECRET_KEY'),
+            'account_name': self.__config.get('MDH_ACCOUNT_NAME'),
+            'project_id': self.__config.get('MDH_PROJECT_ID'),
+        }
+        self.mdh = MDH(**mdh_configuration)
+ 
+        athena_uh_configuration = {
+            # TODO
+        }
+        athena_mdh_configuration = {
+            # TODO
+        }
+        self.athena_mdh = None
+        self.athena_uh = None
+        self.participant_id = self.__config.get('participant_id')
+        self.end_date = self.__config.get('end_date')
+        self.start_date = self.__config.get('start_date')
 
         # Go ahead and get all the information for the participant from MDH
-        self.participant = mdh.getParticipant(participant_id)
+        self.participant = self.mdh.getParticipant(self.participant_id)
 
         # Make sure that this participant has enrolled
         if not self.participant['enrolled']:
             raise ParticipantNotEnrolled('Participant is not yet enrolled in the study')
 
-    def enrolledDate(self) -> date:
+    def enrolledDate(self) -> datetime.date:
         """
         Returns the enrollment date of the participant.
         """
         date_str = self.participant['enrollmentDate']
         if type(date_str) == str:
-            return datetime.fromisoformat(date_str).date()
+            return datetime.datetime.fromisoformat(date_str).date()
         else:
             return date_str
 
@@ -79,8 +91,8 @@ class Helper:
         Returns the total number of weeks (rounded up) the
         participant has enrolled in the study.
         """
-        enrolled_on = datetime.fromisoformat(self.participant['enrollmentDate'])
-        today = datetime.now(timezone.utc)
+        enrolled_on = datetime.datetime.fromisoformat(self.participant['enrollmentDate'])
+        today = datetime.datetime.now(datetime.timezone.utc)
         delta = today - enrolled_on
 
         weeks = math.ceil(delta.days / 7)
@@ -185,8 +197,8 @@ class Helper:
         query_prev_week = f"""
             select systolic, diastolic from omronbloodpressure
                 where participantIdentifier = '{self.participant_id}'
-                and datetimelocal >= date('{(self.start_date - timedelta(days=7)).isoformat()}')
-                and datetimelocal <= date('{(self.end_date - timedelta(days=1)).isoformat()}')
+                and datetimelocal >= date('{(self.start_date - datetime.timedelta(days=7)).isoformat()}')
+                and datetimelocal <= date('{(self.end_date - datetime.timedelta(days=1)).isoformat()}')
         """
 
         this_week: pd.DataFrame = self.athena_mdh.execQuery(query_this_week)
