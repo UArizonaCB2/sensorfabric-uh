@@ -52,7 +52,7 @@ class UltrahumanDataUploader:
         self.mdh = None
         self.uh_api = None
         self.timezone = pytz.timezone(config.get('TIMEZONE', DEFAULT_TIMEZONE))
-
+        self.dry_run = False
         # S3 configuration from config
         self.data_bucket = os.getenv('SF_DATA_BUCKET', None)
         self.database_name = os.getenv('SF_DATABASE_NAME', None)
@@ -100,6 +100,10 @@ class UltrahumanDataUploader:
             # Connection initialization failures are typically retryable (network, auth server issues)
             handle_api_error(e, {'operation': 'connection_initialization'}, 'initialize_connections')
             raise
+
+    def _set_dry_run(self, dry_run: bool = False):
+        self.dry_run = dry_run
+        logger.debug(f"Dry run set to: {self.dry_run}")
 
     def _set_target_date(self, target_date: Optional[str] = None):
         """Set the target date for data collection."""
@@ -155,6 +159,10 @@ class UltrahumanDataUploader:
         if df.empty:
             logger.info(f"No new data after timestamp filtering: {metric_type}")
             return {'record_count': 0, 'max_timestamp': max_timestamp}
+
+        if self.dry_run:
+            logger.info(f"Dry run: would upload {len(df)} records for {metric_type}")
+            return {'record_count': len(df), 'max_timestamp': max_timestamp}
 
         wr.s3.to_parquet(
             df=df,
@@ -510,6 +518,8 @@ def lambda_handler(event, context):
         uploader = UltrahumanDataUploader(config=secrets)
         # logger.info("got event:")
         # logger.info(event)
+        dry_run = event.get('dry_run', False)
+        uploader._set_dry_run(dry_run)
         # Check if this is an SNS event
         if 'Records' in event:
             # Process SNS records

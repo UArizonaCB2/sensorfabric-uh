@@ -44,7 +44,7 @@ class UltrahumanSNSPublisher:
         self.__config = config
         self.mdh = None
         self.sns_client = None
-        
+        self.dry_run = False
         # SNS configuration from environment variables
         self.sns_topic_arn = os.getenv('UH_SNS_TOPIC_ARN')
         self.dead_letter_queue_url = os.getenv('UH_DLQ_URL')
@@ -77,6 +77,10 @@ class UltrahumanSNSPublisher:
             # MDH connection failures are typically retryable
             handle_api_error(e, {'operation': 'mdh_connection_initialization'}, 'initialize_mdh_connection')
             raise
+
+    def _set_dry_run(self, dry_run: bool = False):
+        self.dry_run = dry_run
+        logger.debug(f"Dry run set to: {self.dry_run}")
 
     def _set_target_date(self, target_date: Optional[str] = None):
         """Set the target date for data collection."""
@@ -159,6 +163,7 @@ class UltrahumanSNSPublisher:
             'email': email,
             'target_date': self.target_date,
             'timezone': timezone,
+            'dry_run': self.dry_run,
             'custom_fields': custom_fields
         }
         
@@ -392,6 +397,8 @@ def lambda_handler(event, context):
         # Extract target date from event if provided
         target_date = event.get('target_date', None)
         participant_id = event.get('participant_id', None)
+        dry_run = event.get('dry_run', False)
+        publisher._set_dry_run(dry_run)
         # Publish messages for all participants
         if participant_id is not None:
             result = publisher.publish_participant_messages(target_date, participant_id)
