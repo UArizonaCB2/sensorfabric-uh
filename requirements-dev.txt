@@ -24,7 +24,7 @@ pytz==2025.2
 referencing==0.36.2
 requests==2.32.3
 rpds-py==0.25.1
-sensorfabric==3.3.1
+sensorfabric==3.3.2
 s3transfer==0.13.0
 setuptools==80.8.0
 six==1.17.0
