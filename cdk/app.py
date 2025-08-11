@@ -10,19 +10,20 @@ account = app.node.try_get_context("account") or "509812589231"
 region = app.node.try_get_context("region") or "us-east-1"
 
 # Get configuration from context or use defaults
-config = StackConfig(
-    stack_name=app.node.try_get_context("stack_name") or "Ultrahuman-Dev",
-    environment=app.node.try_get_context("environment") or "dev",
-    ecr_registry=app.node.try_get_context("ecr_registry") or "509812589231.dkr.ecr.us-east-1.amazonaws.com",
-    ecr_repository=app.node.try_get_context("ecr_repository") or "uh-biobayb",
-    project_name=app.node.try_get_context("project_name") or "uh-biobayb-dev",
-    database_name=app.node.try_get_context("database_name") or "uh-biobayb-dev",
-    sns_topic_name=app.node.try_get_context("sns_topic_name") or "mdh_uh_sync",
-    aws_secret_name=app.node.try_get_context("aws_secret_name") or "prod/biobayb/uh/keys",
-    sf_data_bucket=app.node.try_get_context("sf_data_bucket") or "uoa-biobayb-uh-dev",
-    uh_environment=app.node.try_get_context("uh_environment") or "production",
-    template_mode=app.node.try_get_context("template_mode") or "PRESENT"
-)
+# no longer need dev stack.
+# config = StackConfig(
+#     stack_name=app.node.try_get_context("stack_name") or "Ultrahuman-Dev",
+#     environment=app.node.try_get_context("environment") or "dev",
+#     ecr_registry=app.node.try_get_context("ecr_registry") or "509812589231.dkr.ecr.us-east-1.amazonaws.com",
+#     ecr_repository=app.node.try_get_context("ecr_repository") or "uh-biobayb",
+#     project_name=app.node.try_get_context("project_name") or "uh-biobayb-dev",
+#     database_name=app.node.try_get_context("database_name") or "uh-biobayb-dev",
+#     sns_topic_name=app.node.try_get_context("sns_topic_name") or "mdh_uh_sync",
+#     aws_secret_name=app.node.try_get_context("aws_secret_name") or "prod/biobayb/uh/keys",
+#     sf_data_bucket=app.node.try_get_context("sf_data_bucket") or "uoa-biobayb-uh-dev",
+#     uh_environment=app.node.try_get_context("uh_environment") or "production",
+#     template_mode=app.node.try_get_context("template_mode") or "PRESENT"
+# )
 
 prodConfig = StackConfig(
     stack_name="Ultrahuman-Prod",
@@ -54,13 +55,13 @@ prodConfig = StackConfig(
 # )
 
 # Create the Lambda stack using the stack_name as construct_id
-SensorFabricLambdaStack(
-    app,
-    config.stack_name,
-    config=config,
-    env=cdk.Environment(account=account, region=region),
-    description=f"SensorFabric Staging - {config.stack_name} deployed via Docker containers"
-)
+# SensorFabricLambdaStack(
+#     app,
+#     config.stack_name,
+#     config=config,
+#     env=cdk.Environment(account=account, region=region),
+#     description=f"SensorFabric Staging - {config.stack_name} deployed via Docker containers"
+# )
 
 SensorFabricLambdaStack(
     app,
