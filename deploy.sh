@@ -217,11 +217,41 @@ setup_build_directories() {
     # Create single build directory for shared image
     mkdir -p "$BUILD_DIR/shared"
     
+    log_debug "Build directory created: $BUILD_DIR/shared"
+    log_debug "Current working directory: $(pwd)"
+    log_debug "Checking source files existence..."
+    
     # Copy requirements.txt
     cp requirements.txt "$BUILD_DIR/shared/"
     
-    # Copy entire ultrahuman package
-    cp -r ultrahuman/ "$BUILD_DIR/shared/"
+    # Copy entire ultrahuman package (ensure compatibility across platforms)
+    if [ -d "ultrahuman" ]; then
+        log_debug "ultrahuman directory found, contents:"
+        if [ "$DEBUG" = "true" ]; then
+            ls -la ultrahuman/
+        fi
+        
+        # Use rsync for better cross-platform compatibility if available, fallback to cp
+        if command -v rsync &> /dev/null; then
+            log_debug "Using rsync to copy ultrahuman directory"
+            rsync -a ultrahuman/ "$BUILD_DIR/shared/ultrahuman/"
+        else
+            # Create target directory first to ensure it exists
+            log_debug "Using cp to copy ultrahuman directory"
+            mkdir -p "$BUILD_DIR/shared/ultrahuman"
+            cp -r ultrahuman/* "$BUILD_DIR/shared/ultrahuman/"
+        fi
+        
+        log_debug "Verifying ultrahuman copy completed:"
+        if [ "$DEBUG" = "true" ]; then
+            ls -la "$BUILD_DIR/shared/ultrahuman/"
+        fi
+    else
+        log_error "ultrahuman directory not found in $(pwd)"
+        log_debug "Contents of current directory:"
+        ls -la
+        exit 1
+    fi
     
     # Copy the shared Dockerfile
     cp "$DOCKER_DIR/Dockerfile.shared" "$BUILD_DIR/shared/Dockerfile"
