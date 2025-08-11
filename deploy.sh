@@ -844,7 +844,14 @@ health_check() {
         # Check recent errors
         local error_count
         local start_time
-        start_time=$(date -d '5 minutes ago' +%s)000
+        # Cross-platform date calculation (5 minutes ago in milliseconds)
+        if date -v-5M +%s >/dev/null 2>&1; then
+            # macOS/BSD date
+            start_time=$(date -v-5M +%s)000
+        else
+            # GNU date (Linux)
+            start_time=$(date -d '5 minutes ago' +%s)000
+        fi
         error_count=$(aws logs filter-log-events \
             --log-group-name "/aws/lambda/$aws_func" \
             --start-time "$start_time" \
