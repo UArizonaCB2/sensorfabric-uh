@@ -128,20 +128,26 @@ class TemplateGenerator:
             self._initialize_connections()
 
         if target_week is None:
-            last_week_utc_timestamp = datetime.datetime.now()
+            last_week_utc_timestamp = datetime.datetime.now().date()
         else:
             # TODO make target_week processing more robust.
             # TODO need to use participant's timezone? not sure.
-            last_week_utc_timestamp = datetime.datetime.strptime(target_week, '%Y-%m-%d')
+            last_week_utc_timestamp = datetime.datetime.strptime(target_week, '%Y-%m-%d').date()
 
         config = {
             'MDH_SECRET_KEY': self.__config.get('MDH_SECRET_KEY'),
             'MDH_ACCOUNT_NAME': self.__config.get('MDH_ACCOUNT_NAME'),
             'MDH_PROJECT_ID': self.__config.get('MDH_PROJECT_ID'),
+            # TODO: Move these over to secrets
+            'MDH_PROJECT_NAME': self.__config.get('MDH_PROJECT_NAME'),
+            'UH_DATABASE': self.__config.get('UH_DATABASE'),
+            'UH_WORKGROUP': self.__config.get('UH_WORKGROUP'),
+            'UH_S3_LOCATION': self.__config.get('UH_S3_LOCATION'),
             'participant_id': participant_id,
             'end_date': last_week_utc_timestamp,
-            'start_date': last_week_utc_timestamp - datetime.timedelta(days=7)
+            'start_date': last_week_utc_timestamp - datetime.timedelta(days=6)
         }
+
         helper = Helper(config=config)
         ringwear = helper.ringWearTime()
         weight = helper.weightSummary()
@@ -157,6 +163,12 @@ class TemplateGenerator:
 
         env = Environment(loader=FileSystemLoader('ultrahuman/templates'))
         template = env.get_template('reportv2.html')
+
+        # Convert the start and end dates to something that user can read.
+        # TODO: If the dates are from different years then we should also show the year for
+        # start_str
+        start_str = config['start_date'].strftime("%B %d")
+        end_str = config['end_date'].strftime("%B %d, %Y")
 
         data = dict(
             ringwear=ringwear,
@@ -177,7 +189,8 @@ class TemplateGenerator:
             sleep_enabled=True,
             weight_enabled=True,
             movement_enabled=True,
-            report_date=datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+            start_str=start_str,
+            end_str=end_str
         )
 
         html = template.render(data)
@@ -260,7 +273,7 @@ def lambda_handler(event, context):
         # Check if this is a direct lambda invocation
         elif 't' in event:
             jwt_token = event.get('t')
-        
+
         if not jwt_token:
             return {
                 'statusCode': 400,
@@ -307,6 +320,7 @@ def lambda_handler(event, context):
         
     except Exception as e:
         error_message = f"Template Generator Lambda failed: {str(e)}"
+
         logger.error(error_message)
         return {
             'statusCode': 500,

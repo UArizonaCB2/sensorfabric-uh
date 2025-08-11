@@ -396,7 +396,7 @@
             <div class="report-card summary-card">
                 <div class="summary-card-header">
                     <h1>Your Weekly Report</h1>
-                    <p>For the week of July 28 - August 3, 2025</p>
+                    <p>For the week of {{start_str}} - {{end_str}}</p>
                 </div>
                 <div class="summary-metrics">
                     {% if current_pregnancy_week is not none %}<div class="metric-item">
@@ -456,8 +456,9 @@
                 </div>
                 <div class="card-body">
                     <p class="primary-metric">{{movement.average_steps_int}}</p>
-                    <p class="secondary-text">{{movement.total_movement_mins}} total minutes</p>
+                    {% if movement.trend is not none %}
                     <p class="trend negative">{{movement.trend}} steps than last week</p>
+                    {% endif %}
                 </div>
             </div>
             {% endif %}

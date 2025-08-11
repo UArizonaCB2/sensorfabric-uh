@@ -13,7 +13,7 @@ app = Flask(__name__)
 @app.route('/')
 def index():
     event = {
-        'participant_id': 'BB-3234-3734',
+        't': 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJwYXJ0aWNpcGFudF9pZCI6IkJCLTI4NDQtMDAxNSIsInN0YXJ0X2RhdGUiOiIyMDI1LTA4LTAzIiwiZW5kX2RhdGUiOiIyMDI1LTA4LTEwIiwiaWF0IjoxNzU0ODA5MjU1LCJleHAiOjE3NTc0MDEyNTV9.XbNpKpBHf8e28veT4nGhFCqt4NU7XoSxv8ejMvWyV3E',
     }
     html = lambda_handler(event, None)
     return html['body']

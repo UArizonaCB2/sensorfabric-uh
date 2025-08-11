@@ -1,5 +1,5 @@
 from sensorfabric.mdh import MDH
-from sensorfabric.athena import athena
+from sensorfabric.needle import Needle
 import pandas as pd
 import datetime
 import math
@@ -30,12 +30,13 @@ class Helper:
             - MDH_SECRET_KEY: MDH secret key
             - MDH_ACCOUNT_NAME: MDH account name
             - MDH_PROJECT_ID: MDH project ID
-            - UH_SECRET_KEY: UH secret key
-            - UH_ACCOUNT_NAME: UH account name
-            - UH_PROJECT_ID: UH project ID
+            - MDH_PROJECT_NAME: MDH projetc name.
+            - UH_DATABASE: AWS database name for UH data.
+            - UH_WORKGROUP: AWS workgroup name for UH data.
+            - UH_S3_LOCATION: AWS S3 location for query results for UH.
             - participant_id: Participant ID
-            - end_date: End date of the week
-            - start_date: Start date of the week
+            - end_date (datetime.date): End date of the week
+            - start_date (datetime.date): Start date of the week
 
         Returns
         -------
@@ -51,16 +52,23 @@ class Helper:
             'account_name': self.__config.get('MDH_ACCOUNT_NAME'),
             'project_id': self.__config.get('MDH_PROJECT_ID'),
         }
+        # Used to access MDH API such as surveys, custom variables etc.
         self.mdh = MDH(**mdh_configuration)
- 
-        athena_uh_configuration = {
-            # TODO
-        }
-        athena_mdh_configuration = {
-            # TODO
-        }
-        self.athena_mdh = None
-        self.athena_uh = None
+
+        self.athena_mdh = Needle(method='mdh', mdh_configuration={
+            'account_secret': self.__config.get('MDH_SECRET_KEY'),
+            'account_name': self.__config.get('MDH_ACCOUNT_NAME'),
+            'project_id': self.__config.get('MDH_PROJECT_ID'),
+            'project_name': self.__config.get('MDH_PROJECT_NAME')
+        })
+
+        # Maintains an Athena SQL connection to UA databases.
+        # ACCESS and SECRET keys are used from system defaults.
+        self.athena_uh = Needle(method='aws', aws_configuration={
+            'database': self.__config.get('UH_DATABASE'),
+            'workgroup': self.__config.get('UH_WORKGROUP'),
+            's3_location': self.__config.get('UH_S3_LOCATION')
+        })
         self.participant_id = self.__config.get('participant_id')
         self.end_date = self.__config.get('end_date')
         self.start_date = self.__config.get('start_date')
@@ -354,12 +362,12 @@ class Helper:
 
     def sleepSummary(self):
         """
-        Get the summary of sleep values in the past week.
+        Get the sleep summary values for this week.
         """
         if os.getenv('TEMPLATE_MODE', 'PRODUCTION') == 'PRESENT':
             return self._debugOutputs()
 
-        raise ('Function not implemented')
+        return None
 
     def weightSummary(self):
         """
@@ -427,7 +435,58 @@ class Helper:
         if os.getenv('TEMPLATE_MODE', 'PRODUCTION') == 'PRESENT':
             return self._debugOutputs()
 
-        raise ('Function not implemented')
+        query = f"""
+        with scurr as (
+            select cast(
+                    from_iso8601_timestamp(object_values_timestamp_iso8601_tz) as date
+                ) step_date,
+                sum(object_values_value) total_steps
+            from steps
+            where pid = '{self.participant_id}'
+                and from_iso8601_timestamp(object_values_timestamp_iso8601_tz) <= date('{self.end_date}')
+                and from_iso8601_timestamp(object_values_timestamp_iso8601_tz) <= date('{self.end_date}') - interval '6' day
+            group by cast(
+                    from_iso8601_timestamp(object_values_timestamp_iso8601_tz) as date
+                )
+        ),
+        sprev as (
+            select cast(
+                    from_iso8601_timestamp(object_values_timestamp_iso8601_tz) as date
+                ) step_date,
+                sum(object_values_value) total_steps
+            from steps
+            where pid = 'BB-3234-3734'
+                and from_iso8601_timestamp(object_values_timestamp_iso8601_tz) <= date('{self.end_date}') - interval '7' day
+                and from_iso8601_timestamp(object_values_timestamp_iso8601_tz) <= date('{self.end_date}') - interval '13' day
+            group by cast(
+                    from_iso8601_timestamp(object_values_timestamp_iso8601_tz) as date
+                )
+        )
+        select cast(floor(avg(scurr.total_steps)) as int) avg_curr,
+            cast(floor(avg(sprev.total_steps)) as int) avg_prev,
+            cast(floor(avg(scurr.total_steps)) - floor(avg(sprev.total_steps)) as int) "steps_changed"
+        from scurr
+            cross join sprev
+        """
+
+        movement = self.athena_uh.execQuery(query)
+        if movement.shape[0] <= 0:
+            return None
+
+        avg_steps = None
+        steps_changed = None
+        try:
+            avg_steps = int(movement['avg_curr'][0])
+            steps_changed = int(movement['steps_changed'][0])
+        except:
+            return None
+
+        return {
+                'total_movements_mins': None,
+                'average_steps_int': self._addCommas(avg_steps),
+                # Trend can return a positive or negative value.
+                'trend': self._addCommas(steps_changed),
+            }
 
     def topSymptomsRecorded(self):
         """
@@ -467,7 +526,7 @@ class Helper:
         tsymptoms = []
         for name, count, days in zip(topsymptoms['symptom'], topsymptoms['total_count'], topsymptoms['days']):
             tsymptoms.append({
-                'name': self._capFirst(strname),
+                'name': self._capFirst(name.replace('_', ' ')),
                 'count': count,
                 'days': days,
             })
@@ -488,7 +547,7 @@ class Helper:
         cbuff = ""
         for i in range(0, len(buff)):
             cbuff = cbuff + buff[i]
-            if (i+1) % 3 == 0:
+            if i < len(buff)-1 and (i+1) % 3 == 0:
                 cbuff = cbuff + ','
         cbuff = cbuff[::-1]
 
