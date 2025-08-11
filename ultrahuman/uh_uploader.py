@@ -19,7 +19,22 @@ import pytz
 # Configure logging
 logger = logging.getLogger()
 DEFAULT_LOG_LEVEL = os.getenv('LOG_LEVEL', logging.DEBUG)
-
+WHITELISTED_TABLES = [
+    'avg_sleep_hrv',
+    'bedtime_end',
+    'bedtime_start',
+    'hr',
+    'hr_graph',
+    'hrv',
+    'movement_graph',
+    'night_rhr',
+    'quick_metrics',
+    'quick_metrics_tiled',
+    'sleep_graph',
+    'sleep_stages',
+    'steps',
+    'temp'
+]
 
 if logging.getLogger().hasHandlers():
     # The Lambda environment pre-configures a handler logging to stderr. If a handler is already configured,
@@ -163,6 +178,8 @@ class UltrahumanDataUploader:
         if self.dry_run:
             logger.info(f"Dry run: would upload {len(df)} records for {metric_type}")
             return {'record_count': len(df), 'max_timestamp': max_timestamp}
+
+        # TODO connect timestamp fields sleep for connection.
 
         wr.s3.to_parquet(
             df=df,
@@ -308,6 +325,9 @@ class UltrahumanDataUploader:
                 logger.debug(f"Processing Sleep metric.")
                 sleep_obj = metric.get('object')
                 for obj in sleep_obj.items():
+                    if obj[0] not in WHITELISTED_TABLES:
+                        logger.debug(f"Skipping {obj[0]} as it is not whitelisted.")
+                        continue
                     newObj = {'type': obj[0], 'object': copy.deepcopy(obj[1])}
                     result = self._process_metric_data(newObj, participant_id, email, target_date, timezone, uh_sync_timestamp)
                     record_count += result['record_count']
@@ -316,6 +336,9 @@ class UltrahumanDataUploader:
                     logger.debug(f"Processed {newObj['type']}: {result['record_count']} records, max_timestamp: {result['max_timestamp']}")
             else:
                 # Process standard metrics
+                if metric_type not in WHITELISTED_TABLES:
+                    logger.debug(f"Skipping {metric_type} as it is not whitelisted.")
+                    continue
                 result = self._process_metric_data(metric, participant_id, email, target_date, timezone, uh_sync_timestamp)
                 # Update record count and timestamp tracking
                 record_count += result['record_count']
