@@ -16,7 +16,17 @@ DOCKER_DIR="docker"
 BUILD_DIR="build"
 
 # Lambda function mappings - will be populated dynamically
-declare -A LAMBDA_FUNCTIONS
+# Using arrays instead of associative arrays for cross-platform compatibility
+LAMBDA_FUNCTION_KEYS=()
+LAMBDA_FUNCTION_VALUES=()
+
+# Helper function to add key-value pairs to our pseudo-associative array
+add_lambda_function() {
+    local key="$1"
+    local value="$2"
+    LAMBDA_FUNCTION_KEYS+=("$key")
+    LAMBDA_FUNCTION_VALUES+=("$value")
+}
 
 # Stack filter for operations (empty means all stacks)
 STACK_FILTER=""
@@ -34,8 +44,8 @@ discover_lambda_functions() {
     log_header "Discovering deployed Lambda functions..."
     
     # Clear existing mappings
-    unset LAMBDA_FUNCTIONS
-    declare -gA LAMBDA_FUNCTIONS
+    LAMBDA_FUNCTION_KEYS=()
+    LAMBDA_FUNCTION_VALUES=()
     
     # Get all Lambda functions that match our naming pattern
     log_debug "Querying AWS Lambda for functions matching our pattern..."
@@ -61,8 +71,8 @@ discover_lambda_functions() {
     if [ -z "$functions" ] || [ "$functions" = " " ]; then
         log_warning "No Lambda functions found matching our pattern"
         # Fallback to legacy naming for backward compatibility
-        LAMBDA_FUNCTIONS["uh_uploader"]="biobayb_uh_uploader"
-        LAMBDA_FUNCTIONS["uh_publisher"]="biobayb_uh_sns_publisher"
+        add_lambda_function "uh_uploader" "biobayb_uh_uploader"
+        add_lambda_function "uh_publisher" "biobayb_uh_sns_publisher"
         log_info "Using legacy function names as fallback"
         return
     fi
@@ -91,7 +101,7 @@ discover_lambda_functions() {
             fi
             
             local key="${project_name}-uh_uploader"
-            LAMBDA_FUNCTIONS["$key"]="$func"
+            add_lambda_function "$key" "$func"
             log_info "Mapped $key -> $func"
         elif [[ "$func" == *"_biobayb_uh_publisher_Lambda" ]]; then
             # Extract project name from function name (format: {project_name}_biobayb_uh_publisher_Lambda)
@@ -105,7 +115,7 @@ discover_lambda_functions() {
             fi
             
             local key="${project_name}-uh_publisher"
-            LAMBDA_FUNCTIONS["$key"]="$func"
+            add_lambda_function "$key" "$func"
             log_info "Mapped $key -> $func"
         elif [[ "$func" == *"_biobayb_uh_template_generator_Lambda" ]]; then
             # Extract project name from function name (format: {project_name}_biobayb_uh_template_generator_Lambda)
@@ -119,7 +129,7 @@ discover_lambda_functions() {
             fi
             
             local key="${project_name}-uh_template_generator"
-            LAMBDA_FUNCTIONS["$key"]="$func"
+            add_lambda_function "$key" "$func"
             log_info "Mapped $key -> $func"
         elif [[ "$func" == *"_biobayb_uh_jwt_generator_Lambda" ]]; then
             # Extract project name from function name (format: {project_name}_biobayb_uh_jwt_generator_Lambda)
@@ -133,7 +143,7 @@ discover_lambda_functions() {
             fi
             
             local key="${project_name}-uh_jwt_generator"
-            LAMBDA_FUNCTIONS["$key"]="$func"
+            add_lambda_function "$key" "$func"
             log_info "Mapped $key -> $func"
         else
             log_debug "Function '$func' doesn't match expected patterns"
@@ -142,7 +152,7 @@ discover_lambda_functions() {
     
     log_debug "Processed $function_count functions total"
     
-    if [ ${#LAMBDA_FUNCTIONS[@]} -eq 0 ]; then
+    if [ ${#LAMBDA_FUNCTION_KEYS[@]} -eq 0 ]; then
         if [ -n "$STACK_FILTER" ]; then
             log_error "No Lambda functions found for stack: $STACK_FILTER"
         else
@@ -157,7 +167,7 @@ discover_lambda_functions() {
     else
         stack_info=" across deployed stacks"
     fi
-    log_info "Discovered ${#LAMBDA_FUNCTIONS[@]} Lambda functions${stack_info}"
+    log_info "Discovered ${#LAMBDA_FUNCTION_KEYS[@]} Lambda functions${stack_info}"
 }
 
 # Logging functions
@@ -365,8 +375,9 @@ update_lambda_functions() {
     local total_failed=0
     local shared_image_uri="$ECR_REGISTRY/$ECR_REPOSITORY:shared"
     
-    for local_func in "${!LAMBDA_FUNCTIONS[@]}"; do
-        local aws_func=${LAMBDA_FUNCTIONS[$local_func]}
+    for i in "${!LAMBDA_FUNCTION_KEYS[@]}"; do
+        local local_func="${LAMBDA_FUNCTION_KEYS[$i]}"
+        local aws_func="${LAMBDA_FUNCTION_VALUES[$i]}"
         
         log_info "Updating Lambda function: $aws_func with shared image: $shared_image_uri"
         
@@ -715,8 +726,9 @@ validate_prerequisites() {
 test_lambda_functions() {
     log_header "Testing Lambda functions..."
     
-    for local_func in "${!LAMBDA_FUNCTIONS[@]}"; do
-        local aws_func=${LAMBDA_FUNCTIONS[$local_func]}
+    for i in "${!LAMBDA_FUNCTION_KEYS[@]}"; do
+        local local_func="${LAMBDA_FUNCTION_KEYS[$i]}"
+        local aws_func="${LAMBDA_FUNCTION_VALUES[$i]}"
         
         log_info "Testing $aws_func..."
         
@@ -778,8 +790,9 @@ health_check() {
     
     local health_check_passed=true
     
-    for local_func in "${!LAMBDA_FUNCTIONS[@]}"; do
-        local aws_func=${LAMBDA_FUNCTIONS[$local_func]}
+    for i in "${!LAMBDA_FUNCTION_KEYS[@]}"; do
+        local local_func="${LAMBDA_FUNCTION_KEYS[$i]}"
+        local aws_func="${LAMBDA_FUNCTION_VALUES[$i]}"
         
         log_info "Checking health of $aws_func..."
         
