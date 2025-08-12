@@ -187,19 +187,25 @@ class SensorFabricLambdaStack(Stack):
                 "s3:PutObject",
                 "s3:DeleteObject",
                 "s3:ListBucket",
-                
+                "s3:GetBucketLocation",
+
                 # Athena permissions for query execution
                 "athena:StartQueryExecution",
                 "athena:GetQueryExecution",
                 "athena:GetQueryResults",
                 "athena:StopQueryExecution",
                 "athena:GetWorkGroup",
-                
+                "athena:ListQueryExecutions",
+                "athena:ListNamedQueries",
+                "athena:ListTableMetadata",
+                "athena:GetTableMetadata",
+
                 # Glue permissions for data catalog
                 "glue:GetDatabase",
                 "glue:CreateDatabase",
                 "glue:GetTable",
                 "glue:GetPartitions",
+                "glue:GetPartition",
                 "glue:CreateTable",
                 "glue:UpdateTable",
                 "glue:CreatePartition",
