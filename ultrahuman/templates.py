@@ -15,7 +15,7 @@ import jwt
 
 
 logger = logging.getLogger()
-DEFAULT_LOG_LEVEL = os.getenv('LOG_LEVEL', logging.DEBUG)
+DEFAULT_LOG_LEVEL = os.getenv('LOG_LEVEL', logging.INFO)
 
 if logging.getLogger().hasHandlers():
     logging.getLogger().setLevel(DEFAULT_LOG_LEVEL)

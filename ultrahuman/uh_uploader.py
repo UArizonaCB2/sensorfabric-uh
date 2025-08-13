@@ -18,11 +18,11 @@ import pytz
 
 # Configure logging
 logger = logging.getLogger()
-DEFAULT_LOG_LEVEL = os.getenv('LOG_LEVEL', logging.DEBUG)
+DEFAULT_LOG_LEVEL = os.getenv('LOG_LEVEL', logging.INFO)
 WHITELISTED_TABLES = [
     'avg_sleep_hrv',
-    'bedtime_end',
-    'bedtime_start',
+    # 'bedtime_end', # these are actually keys in Sleep data that apply to all sub data. 
+    # 'bedtime_start',# these are actually keys in Sleep data that apply to all sub data 
     'hr',
     'hr_graph',
     'hrv',
@@ -130,8 +130,7 @@ class UltrahumanDataUploader:
 
         logger.debug(f"Collecting data for date: {self.target_date}")
 
-    def _process_metric_data(self, metric: Dict[str, Any], participant_id: str, email: str, 
-                           target_date: str, timezone: str, uh_sync_timestamp: Optional[int]) -> Dict[str, Any]:
+    def _process_metric_data(self, metric: Dict[str, Any], participant_id: str, email: str, target_date: str, timezone: str, uh_sync_timestamp: Optional[int] = None, bedtime_start: Optional[int] = None, bedtime_end: Optional[int] = None) -> Dict[str, Any]:
         """Process a single metric's data and upload to S3.
 
         Args:
@@ -150,12 +149,20 @@ class UltrahumanDataUploader:
             logger.info(f"Empty metric data: {metric_type}")
             logger.debug(f"Empty metric data: {metric}")
             return {'record_count': 0, 'max_timestamp': 0}
-
+        if bedtime_start is not None:
+            metric['bedtime_start'] = bedtime_start
+        if bedtime_end is not None:
+            metric['bedtime_end'] = bedtime_end
         flattened = flatten_json_to_columns(json_data=metric, participant_id=participant_id, fill=True)
         converted = convert_dict_timestamps(flattened, timezone)
         logger.debug(f"Converted data: {converted}")
 
-        df = pd.DataFrame.from_dict(converted, orient="columns")
+        try:
+            df = pd.DataFrame.from_dict(converted, orient="columns")
+        except ValueError as e:
+            logger.error(f"Failed to create dataframe from converted data: {str(e)}")
+            return {'record_count': 0, 'max_timestamp': 0}
+
         if df.empty or len(df) == 0:
             logger.info(f"Empty sensor data: {metric_type}")
             return {'record_count': 0, 'max_timestamp': 0}
@@ -179,30 +186,31 @@ class UltrahumanDataUploader:
             logger.info(f"Dry run: would upload {len(df)} records for {metric_type}")
             return {'record_count': len(df), 'max_timestamp': max_timestamp}
 
-        # TODO connect timestamp fields sleep for connection.
-
-        wr.s3.to_parquet(
-            df=df,
-            path=f"s3://{self.data_bucket}/raw/dataset/{metric_type}",
-            dataset=True,
-            database=self.database_name,
-            table=metric_type,
-            s3_additional_kwargs={
-                'Metadata': {
-                    'participant_id': participant_id,
-                    'participant_email': email,
-                    'data_date': target_date,
-                    'data_type': 'ultrahuman_metrics',
-                    'metric_type': metric_type,
-                    'upload_timestamp': datetime.datetime.now(self.timezone).isoformat(),
-                    'record_count': str(len(df))
-                }
-            },
-            partition_cols=['pid'],
-            mode='append',
-        )
-
-        return {'record_count': len(df), 'max_timestamp': max_timestamp}
+        try:
+            wr.s3.to_parquet(
+                df=df,
+                path=f"s3://{self.data_bucket}/raw/dataset/{metric_type}",
+                dataset=True,
+                database=self.database_name,
+                table=metric_type,
+                s3_additional_kwargs={
+                    'Metadata': {
+                        'participant_id': participant_id,
+                        'participant_email': email,
+                        'data_date': target_date,
+                        'data_type': 'ultrahuman_metrics',
+                        'metric_type': metric_type,
+                        'upload_timestamp': datetime.datetime.now(self.timezone).isoformat(),
+                        'record_count': str(len(df))
+                    }
+                },
+                partition_cols=['pid'],
+                mode='append',
+            )
+            return {'record_count': len(df), 'max_timestamp': max_timestamp}
+        except Exception as e:
+            logger.error(f"Failed to upload data to S3: {str(e)}")
+            return {'record_count': 0, 'max_timestamp': max_timestamp}
 
     def _process_sns_message(self, sns_message: Dict[str, Any]) -> Dict[str, Any]:
         """Process SNS message to extract participant data.
@@ -329,7 +337,7 @@ class UltrahumanDataUploader:
                         logger.debug(f"Skipping {obj[0]} as it is not whitelisted.")
                         continue
                     newObj = {'type': obj[0], 'object': copy.deepcopy(obj[1])}
-                    result = self._process_metric_data(newObj, participant_id, email, target_date, timezone, uh_sync_timestamp)
+                    result = self._process_metric_data(newObj, participant_id, email, target_date, timezone, uh_sync_timestamp, bedtime_start=sleep_obj.get('bedtime_start'), bedtime_end=sleep_obj.get('bedtime_end'))
                     record_count += result['record_count']
                     if result['max_timestamp'] > last_uh_timestamp:
                         last_uh_timestamp = result['max_timestamp']
@@ -339,7 +347,7 @@ class UltrahumanDataUploader:
                 if metric_type not in WHITELISTED_TABLES:
                     logger.debug(f"Skipping {metric_type} as it is not whitelisted.")
                     continue
-                result = self._process_metric_data(metric, participant_id, email, target_date, timezone, uh_sync_timestamp)
+                result = self._process_metric_data(metric, participant_id, email, target_date, timezone, uh_sync_timestamp, bedtime_start=None, bedtime_end=None)
                 # Update record count and timestamp tracking
                 record_count += result['record_count']
                 if result['max_timestamp'] > last_uh_timestamp:

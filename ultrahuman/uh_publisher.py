@@ -13,7 +13,7 @@ from ultrahuman.error_handling import handle_api_error, RetryableError, NonRetry
 
 # Configure logging
 logger = logging.getLogger()
-DEFAULT_LOG_LEVEL = os.getenv('LOG_LEVEL', logging.DEBUG)
+DEFAULT_LOG_LEVEL = os.getenv('LOG_LEVEL', logging.INFO)
 
 if logging.getLogger().hasHandlers():
     # The Lambda environment pre-configures a handler logging to stderr. If a handler is already configured,
