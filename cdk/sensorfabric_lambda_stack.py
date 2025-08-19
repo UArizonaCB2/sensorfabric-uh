@@ -33,6 +33,7 @@ class StackConfig:
     sf_data_bucket: str
     uh_environment: str
     template_mode: str        # PRODUCTION or PRESENT
+    jwt_expiration_days: str
 
 
 class SensorFabricLambdaStack(Stack):
