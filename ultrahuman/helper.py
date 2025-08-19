@@ -480,7 +480,7 @@ class Helper:
         -- Using conditional aggregation to eliminate cross joins
         with daily_steps as (
             select 
-                date(from_unixtime(object_values_timestamp / 1000)) step_date,
+                date(from_unixtime(object_values_timestamp)) step_date,
                 sum(object_values_value) total_steps,
                 case 
                     when object_values_timestamp >= {curr_start_ts} and object_values_timestamp < {curr_end_ts} then 'current'
@@ -493,7 +493,7 @@ class Helper:
                     (object_values_timestamp >= {curr_start_ts} and object_values_timestamp < {curr_end_ts}) or
                     (object_values_timestamp >= {prev_start_ts} and object_values_timestamp < {prev_end_ts})
                 )
-            group by date(from_unixtime(object_values_timestamp / 1000)), 
+            group by date(from_unixtime(object_values_timestamp)), 
                 case 
                     when object_values_timestamp >= {curr_start_ts} and object_values_timestamp < {curr_end_ts} then 'current'
                     when object_values_timestamp >= {prev_start_ts} and object_values_timestamp < {prev_end_ts} then 'previous'
