@@ -99,7 +99,7 @@ class SensorFabricLambdaStack(Stack):
                 "description": "UltraHuman data uploader Lambda function",
                 "handler": "ultrahuman.uh_uploader.lambda_handler",
                 "timeout": Duration.minutes(15),
-                "memory_size": 3072,
+                "memory_size": 1024,
                 "environment": {
                     "UH_ENVIRONMENT": self.config.uh_environment,
                     "SF_DATA_BUCKET": self.config.sf_data_bucket,
@@ -111,7 +111,7 @@ class SensorFabricLambdaStack(Stack):
                 "description": "UltraHuman SNS publisher Lambda function",
                 "handler": "ultrahuman.uh_publisher.lambda_handler",
                 "timeout": Duration.minutes(10),
-                "memory_size": 2048,
+                "memory_size": 1024,
                 "environment": {
                     "AWS_SECRET_NAME": self.config.aws_secret_name,
                     "UH_ENVIRONMENT": self.config.uh_environment
@@ -121,7 +121,7 @@ class SensorFabricLambdaStack(Stack):
                 "description": "UltraHuman weekly report template generator Lambda function",
                 "handler": "ultrahuman.templates.lambda_handler",
                 "timeout": Duration.minutes(10),
-                "memory_size": 2048,
+                "memory_size": 1024,
                 "environment": {
                     "AWS_SECRET_NAME": self.config.aws_secret_name,
                     "TEMPLATE_MODE": self.config.template_mode
@@ -131,10 +131,10 @@ class SensorFabricLambdaStack(Stack):
                 "description": "UltraHuman JWT token generator Lambda function",
                 "handler": "ultrahuman.uh_jwt_generator.lambda_handler",
                 "timeout": Duration.minutes(10),
-                "memory_size": 2048,
+                "memory_size": 1024,
                 "environment": {
                     "AWS_SECRET_NAME": self.config.aws_secret_name,
-                    "JWT_EXPIRATION_DAYS": "14"
+                    "JWT_EXPIRATION_DAYS": self.config.jwt_expiration_days
                 }
             }
         }
@@ -334,8 +334,7 @@ class SensorFabricLambdaStack(Stack):
                 self, f"{self.config.project_name}_{function_name}_Alias",
                 alias_name="LIVE",
                 version=version,
-                provisioned_concurrent_executions=1,
-                description=f"LIVE alias for {function_name} with provisioned concurrency"
+                description=f"LIVE alias for {function_name}"
             )
             
             self.lambda_aliases[function_name] = alias

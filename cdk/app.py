@@ -36,7 +36,8 @@ prodConfig = StackConfig(
     aws_secret_name="prod/biobayb/uh-prod/prod-keys",
     sf_data_bucket="uoa-biobayb-uh-prod",
     uh_environment="production",
-    template_mode="PRODUCTION"
+    template_mode="PRODUCTION",
+    jwt_expiration_days="14"
 )
 
 # TODO: add other stacks.
