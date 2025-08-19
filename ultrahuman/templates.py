@@ -130,9 +130,11 @@ class TemplateGenerator:
         if target_week is None:
             last_week_utc_timestamp = datetime.datetime.now().date()
         else:
-            # TODO make target_week processing more robust.
-            # TODO need to use participant's timezone? not sure.
-            last_week_utc_timestamp = datetime.datetime.strptime(target_week, '%Y-%m-%d').date()
+            # Handle both string and date formats from JWT payload
+            if isinstance(target_week, str):
+                last_week_utc_timestamp = datetime.datetime.strptime(target_week, '%Y-%m-%d').date()
+            else:
+                last_week_utc_timestamp = target_week
 
         config = {
             'MDH_SECRET_KEY': self.__config.get('MDH_SECRET_KEY'),
@@ -145,7 +147,7 @@ class TemplateGenerator:
             'UH_S3_LOCATION': self.__config.get('UH_S3_LOCATION'),
             'participant_id': participant_id,
             'end_date': last_week_utc_timestamp,
-            'start_date': last_week_utc_timestamp - datetime.timedelta(days=6)
+            'start_date': last_week_utc_timestamp - datetime.timedelta(days=7)
         }
 
         helper = Helper(config=config)
