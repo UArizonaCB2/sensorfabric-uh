@@ -6,7 +6,10 @@ import math
 import inspect
 import os
 import random
-from typing import Dict, Any, Optional
+import hashlib
+import json
+import functools
+from typing import Dict, Any, Optional, Tuple
 
 """
 Current Limitations
@@ -70,8 +73,19 @@ class Helper:
             's3_location': self.__config.get('UH_S3_LOCATION')
         })
         self.participant_id = self.__config.get('participant_id')
-        self.end_date = self.__config.get('end_date')
-        self.start_date = self.__config.get('start_date')
+        
+        # Convert date strings to datetime.date objects if they're strings
+        end_date = self.__config.get('end_date')
+        if isinstance(end_date, str):
+            self.end_date = datetime.datetime.fromisoformat(end_date).date()
+        else:
+            self.end_date = end_date
+            
+        start_date = self.__config.get('start_date')
+        if isinstance(start_date, str):
+            self.start_date = datetime.datetime.fromisoformat(start_date).date()
+        else:
+            self.start_date = start_date
 
         # Go ahead and get all the information for the participant from MDH
         self.participant = self.mdh.getParticipant(self.participant_id)
@@ -107,6 +121,32 @@ class Helper:
 
         return weeks
 
+    def _get_utc_timestamp_range(self, start_date: datetime.date, end_date: datetime.date) -> Tuple[int, int]:
+        """
+        Convert date range to UTC timestamp range in milliseconds.
+        
+        Parameters:
+        -----------
+        start_date : datetime.date
+            Start date (inclusive)
+        end_date : datetime.date  
+            End date (inclusive)
+            
+        Returns:
+        --------
+        Tuple[int, int]
+            (start_timestamp_ms, end_timestamp_ms) where end is exclusive
+        """
+        # Convert dates to UTC datetime at start of day
+        start_datetime = datetime.datetime.combine(start_date, datetime.time.min)
+        end_datetime = datetime.datetime.combine(end_date + datetime.timedelta(days=1), datetime.time.min)
+        
+        # Convert to UTC timestamps in seconds (not milliseconds)
+        start_ts = int(start_datetime.replace(tzinfo=datetime.timezone.utc).timestamp())
+        end_ts = int(end_datetime.replace(tzinfo=datetime.timezone.utc).timestamp())
+        
+        return start_ts, end_ts
+
     def weeksPregnant(self) -> int:
         """
         Returns the gestational age in weeks for the user.
@@ -139,15 +179,18 @@ class Helper:
         if os.getenv('TEMPLATE_MODE', 'PRODUCTION') == 'PRESENT':
             return self._debugOutputs()
 
+        # Calculate UTC timestamp range for the past 7 days (including end_date)
+        start_ts, end_ts = self._get_utc_timestamp_range(self.start_date, self.end_date)
+        
         query = f"""
-            -- Assuming that we get temperature values every 5 weeks, we calculate the wear time based on this
-            -- metric.
+            -- Assuming that we get temperature values every 5 minutes, we calculate the wear time based on this
+            -- metric. Using fast integer timestamp comparison instead of expensive string parsing.
             select
-                    cast(ceil(count(*) * 100 / (288.0 * 7)) as int) "wear_percentage"
+                    cast(ceil(count(*) * 100 / 2016.0) as int) "wear_percentage"
                 from temp
                 where pid = '{self.participant_id}'
-                and from_iso8601_timestamp(object_values_timestamp_iso8601_tz) <= date('{self.end_date.isoformat()}')
-                and from_iso8601_timestamp(object_values_timestamp_iso8601_tz) >= date('{self.end_date.isoformat()}') - interval '6' day
+                and object_values_timestamp >= {start_ts}
+                and object_values_timestamp < {end_ts}
         """
 
         weartime = self.athena_uh.execQuery(query)
@@ -193,34 +236,46 @@ class Helper:
         if os.getenv('TEMPLATE_MODE', 'PRODUCTION') == 'PRESENT':
             return self._debugOutputs()
 
-        query_this_week = f"""
-            select systolic, diastolic from omronbloodpressure
+        # Calculate date strings for current and previous weeks
+        start_date_str = self.start_date.strftime('%Y-%m-%d')
+        end_date_str = self.end_date.strftime('%Y-%m-%d')
+        prev_start_date = self.start_date - datetime.timedelta(days=7)
+        prev_end_date = self.end_date - datetime.timedelta(days=7)
+        prev_start_str = prev_start_date.strftime('%Y-%m-%d')
+        prev_end_str = prev_end_date.strftime('%Y-%m-%d')
+
+        # Combined query to get both weeks' data in one database call
+        combined_query = f"""
+            with current_week as (
+                select cast(systolic as double) systolic, cast(diastolic as double) diastolic,
+                       'current' as week_type
+                from omronbloodpressure
                 where participantIdentifier = '{self.participant_id}'
-                and datetimelocal >= date('{self.start_date.isoformat()}')
-                and datetimelocal <= date('{self.end_date.isoformat()}')
-        """
-        # We are using start_date - 7d and end_date - 1d is for the previous week.
-        # For example from if the current week is from (Sun - Sat) then the previous week
-        # is the previous (Sun - Sat)
-        query_prev_week = f"""
-            select systolic, diastolic from omronbloodpressure
+                and cast(datetimelocal as date) between date('{start_date_str}') and date('{end_date_str}')
+            ),
+            previous_week as (
+                select cast(systolic as double) systolic, cast(diastolic as double) diastolic,
+                       'previous' as week_type
+                from omronbloodpressure
                 where participantIdentifier = '{self.participant_id}'
-                and datetimelocal >= date('{(self.start_date - datetime.timedelta(days=7)).isoformat()}')
-                and datetimelocal <= date('{(self.end_date - datetime.timedelta(days=1)).isoformat()}')
+                and cast(datetimelocal as date) between date('{prev_start_str}') and date('{prev_end_str}')
+            )
+            select * from current_week
+            union all
+            select * from previous_week
         """
 
-        this_week: pd.DataFrame = self.athena_mdh.execQuery(query_this_week)
-        previous_week: pd.DataFrame = self.athena_mdh.execQuery(query_prev_week)
+        combined_data: pd.DataFrame = self.athena_mdh.execQuery(combined_query)
+        
+        # Split the results back into current and previous weeks
+        this_week = combined_data[combined_data['week_type'] == 'current'][['systolic', 'diastolic']]
+        previous_week = combined_data[combined_data['week_type'] == 'previous'][['systolic', 'diastolic']]
 
         # If we did not get any BP data for this week, we just return none.
         if this_week.shape[0] <= 0:
             return None
 
-        this_week['systolic'] = pd.to_numeric(this_week['systolic'], errors='coerce')
-        this_week['diastolic'] = pd.to_numeric(this_week['diastolic'], errors='coerce')
-        previous_week['systolic'] = pd.to_numeric(previous_week['systolic'], errors='coerce')
-        previous_week['diastolic'] = pd.to_numeric(previous_week['diastolic'], errors='coerce')
-
+        # Data is already cast to double in SQL, no need for additional pandas conversion
         high_values = 0
         # Check for values which are above the threshold.
         if this_week.shape[0] > 0:
@@ -265,25 +320,20 @@ class Helper:
         if os.getenv('TEMPLATE_MODE', 'PRODUCTION') == 'PRESENT':
             return self._debugOutputs()
 
+        # Calculate UTC timestamp range for the current week
+        start_ts, end_ts = self._get_utc_timestamp_range(self.start_date, self.end_date)
+
         query = f"""
-            with rhr as (
             select
-                cast(floor(avg(object_values_value)) as int) avg_rhr
-            from night_rhr
-            where pid = '{self.participant_id}'
-                and from_iso8601_timestamp(object_values_timestamp_iso8601_tz) <= date('{self.end_date.isoformat()}')
-                and from_iso8601_timestamp(object_values_timestamp_iso8601_tz) >= date('{self.end_date.isoformat()}') - interval '6' day
-            ),
-            hrs as (
-                select count(*) "hr_counts"
-                from hr
-            where pid = 'BB-3234-3734'
-                and from_iso8601_timestamp(object_values_timestamp_iso8601_tz) <= date('{self.end_date.isoformat()}')
-                and from_iso8601_timestamp(object_values_timestamp_iso8601_tz) >= date('{self.end_date.isoformat()}') - interval '6' day
-            )
-            select rhr.avg_rhr, hrs.hr_counts
-                from rhr
-            cross join hrs
+                cast(floor(avg(rhr.object_values_value)) as int) avg_rhr,
+                (select count(*) from hr 
+                 where pid = '{self.participant_id}'
+                 and object_values_timestamp >= {start_ts}
+                 and object_values_timestamp < {end_ts}) hr_counts
+            from night_rhr rhr
+            where rhr.pid = '{self.participant_id}'
+                and rhr.object_values_timestamp >= {start_ts}
+                and rhr.object_values_timestamp < {end_ts}
         """
 
         hrsummary = self.athena_uh.execQuery(query)
@@ -305,48 +355,31 @@ class Helper:
         if os.getenv('TEMPLATE_MODE', 'PRODUCTION') == 'PRESENT':
             return self._debugOutputs()
 
-        query = f"""
-            -- This does not do any outlier removal right now. Just the raw numbers.
-            with wcurr as (
-                select
-                    cast(from_iso8601_timestamp(object_values_timestamp_iso8601_tz) as date) "date",
-                    object_values_value "skin_temp"
-                from temp
-                where pid = '{self.participant_id}'
-                and from_iso8601_timestamp(object_values_timestamp_iso8601_tz) <= date('{self.end_date.isoformat()}')
-                and from_iso8601_timestamp(object_values_timestamp_iso8601_tz) >= date('{self.end_date.isoformat()}') - interval '6' day
-            ),
-            higher as (
-                select count(*) threshold_counts
-                    from wcurr
-                    where (skin_temp + 32) * (9/5) > 100
-            ),
-            wprev as (
-                select
-                    cast(from_iso8601_timestamp(object_values_timestamp_iso8601_tz) as date) "date",
-                    object_values_value "skin_temp"
-                from temp
-                where pid = 'BB-3234-3734'
-                and from_iso8601_timestamp(object_values_timestamp_iso8601_tz) <= date('{self.end_date.isoformat()}') - interval '7' day
-                and from_iso8601_timestamp(object_values_timestamp_iso8601_tz) >= date('{self.end_date.isoformat()}') - interval '13' day
-            ),
-            s as (
-            select avg(wcurr.skin_temp) "curr_avg_temp", count(wcurr.skin_temp) "curr_count",
-                avg(wprev.skin_temp) "prev_avg_temp", count(wprev.skin_temp) "prev_count"
-            from wcurr
-                cross join wprev
-            )
+        # Calculate UTC timestamp ranges for current and previous weeks
+        curr_start_ts, curr_end_ts = self._get_utc_timestamp_range(self.start_date, self.end_date)
+        prev_start_date = self.start_date - datetime.timedelta(days=7)
+        prev_end_date = self.end_date - datetime.timedelta(days=7)
+        prev_start_ts, prev_end_ts = self._get_utc_timestamp_range(prev_start_date, prev_end_date)
 
-            -- TODO: Find out why adding higher.threshold_counts is breaking the library right now.
-            select *,
-                (curr_avg_temp + 32) * (9/5) "curr_avg_temp_f",
-                case
-                    when curr_avg_temp - prev_avg_temp < 0 then 'lower'
-                    when curr_avg_temp - prev_avg_temp > 0 then 'higher'
-                    else 'steady'
-                end "trend"
-                from s
-                cross join higher
+        query = f"""
+            -- Using conditional aggregation to eliminate cross joins
+            select
+                avg(case when object_values_timestamp >= {curr_start_ts} and object_values_timestamp < {curr_end_ts} 
+                    then object_values_value end) curr_avg_temp,
+                count(case when object_values_timestamp >= {curr_start_ts} and object_values_timestamp < {curr_end_ts} 
+                    then object_values_value end) curr_count,
+                avg(case when object_values_timestamp >= {prev_start_ts} and object_values_timestamp < {prev_end_ts} 
+                    then object_values_value end) prev_avg_temp,
+                count(case when object_values_timestamp >= {prev_start_ts} and object_values_timestamp < {prev_end_ts} 
+                    then object_values_value end) prev_count,
+                count(case when object_values_timestamp >= {curr_start_ts} and object_values_timestamp < {curr_end_ts}
+                    and object_values_value * 1.8 + 32 > 100 then 1 end) threshold_counts
+            from temp
+            where pid = '{self.participant_id}'
+                and (
+                    (object_values_timestamp >= {curr_start_ts} and object_values_timestamp < {curr_end_ts}) or
+                    (object_values_timestamp >= {prev_start_ts} and object_values_timestamp < {prev_end_ts})
+                )
         """
 
         temperature = self.athena_uh.execQuery(query)
@@ -354,10 +387,21 @@ class Helper:
         if temperature.shape[0] <= 0:
             return None
 
+        # Calculate trend here since we removed the CASE statement from SQL
+        curr_avg = float(temperature['curr_avg_temp'][0])
+        prev_avg = float(temperature['prev_avg_temp'][0])
+
+        trend = 'steady'
+        if curr_avg and prev_avg:
+            if curr_avg - prev_avg < -0.1:
+                trend = 'lower'
+            elif curr_avg - prev_avg > 0.1:
+                trend = 'higher'
+
         return {
                 'counts': self._addCommas(temperature['curr_count'][0]),
-                'above_threshold_counts': 0,
-                'trend': self._capFirst(temperature['trend'][0]),
+                'above_threshold_counts': temperature['threshold_counts'][0],
+                'trend': self._capFirst(trend),
         }
 
     def sleepSummary(self):
@@ -380,46 +424,37 @@ class Helper:
         if os.getenv('TEMPLATE_MODE', 'PRODUCTION') == 'PRESENT':
             return self._debugOutputs()
 
-        query = f"""
-                with wcurr as (
-                SELECT
-                    CASE units
-                    WHEN 'lb' THEN cast(VALUE AS DOUBLE)
-                    ELSE 2.2 * cast(VALUE AS DOUBLE)
-                    END weight
-                FROM
-                    healthkitv2samples
-                WHERE
-                    TYPE = 'Weight'
-                    AND participantidentifier = '{self.participant_id}'
-                    and cast("date" as date) <= cast('{self.end_date.isoformat()}' as date)
-                    and cast("date" as date) >= cast('{self.end_date.isoformat()}' as date) - interval '6' day
-                ),
-                wprev as (
-                SELECT
-                    CASE units
-                    WHEN 'lb' THEN cast(VALUE AS DOUBLE)
-                    ELSE 2.2 * cast(VALUE AS DOUBLE)
-                    END weight
-                FROM
-                    healthkitv2samples
-                WHERE
-                    TYPE = 'Weight'
-                    AND participantidentifier = 'BB-3234-3734'
-                    and cast("date" as date) <= cast('{self.end_date.isoformat()}' as date) - interval '7' day
-                    and cast("date" as date) >= cast('{self.end_date.isoformat()}' as date) - interval '13' day
-                )
+        end_date_str = self.end_date.strftime('%Y-%m-%d')
+        curr_start_str = self.start_date.strftime('%Y-%m-%d')
+        prev_end_str = (self.end_date - datetime.timedelta(days=7)).strftime('%Y-%m-%d')
+        prev_start_str = (self.start_date - datetime.timedelta(days=7)).strftime('%Y-%m-%d')
 
-                select floor(avg(wcurr.weight)),
-                        floor(avg(wprev.weight)),
-                        floor(avg(wcurr.weight)) - floor(avg(wprev.weight)) "weight_changed" from wcurr
-                cross join wprev
+        query = f"""
+                select 
+                    cast(floor(avg(case when cast("date" as date) between date('{curr_start_str}') and date('{end_date_str}') 
+                        then case units when 'lb' then cast(value as double) else cast(value as double) * 2.20462 end 
+                        end)) as int) curr_avg_weight,
+                    cast(floor(avg(case when cast("date" as date) between date('{prev_start_str}') and date('{prev_end_str}') 
+                        then case units when 'lb' then cast(value as double) else cast(value as double) * 2.20462 end 
+                        end)) as int) prev_avg_weight
+                from healthkitv2samples
+                where type = 'Weight'
+                    and participantidentifier = '{self.participant_id}'
+                    and (
+                        cast("date" as date) between date('{curr_start_str}') and date('{end_date_str}') or
+                        cast("date" as date) between date('{prev_start_str}') and date('{prev_end_str}')
+                    )
         """
 
         healthkit = self.athena_mdh.execQuery(query)
         change_in_weight = None
         try:
-            change_in_weight = int(healthkit['weight_changed'][0])
+            curr_weight = healthkit['curr_avg_weight'][0]
+            prev_weight = healthkit['prev_avg_weight'][0]
+            if curr_weight is not None and prev_weight is not None:
+                change_in_weight = int(curr_weight) - int(prev_weight)
+            else:
+                return None
         except:
             return None
 
@@ -435,38 +470,40 @@ class Helper:
         if os.getenv('TEMPLATE_MODE', 'PRODUCTION') == 'PRESENT':
             return self._debugOutputs()
 
+        # Calculate UTC timestamp ranges for current and previous weeks  
+        curr_start_ts, curr_end_ts = self._get_utc_timestamp_range(self.start_date, self.end_date)
+        prev_start_date = self.start_date - datetime.timedelta(days=7)
+        prev_end_date = self.end_date - datetime.timedelta(days=7)
+        prev_start_ts, prev_end_ts = self._get_utc_timestamp_range(prev_start_date, prev_end_date)
+
         query = f"""
-        with scurr as (
-            select cast(
-                    from_iso8601_timestamp(object_values_timestamp_iso8601_tz) as date
-                ) step_date,
-                sum(object_values_value) total_steps
+        -- Using conditional aggregation to eliminate cross joins
+        with daily_steps as (
+            select 
+                date(from_unixtime(object_values_timestamp / 1000)) step_date,
+                sum(object_values_value) total_steps,
+                case 
+                    when object_values_timestamp >= {curr_start_ts} and object_values_timestamp < {curr_end_ts} then 'current'
+                    when object_values_timestamp >= {prev_start_ts} and object_values_timestamp < {prev_end_ts} then 'previous'
+                    else 'unknown'
+                end period_type
             from steps
             where pid = '{self.participant_id}'
-                and from_iso8601_timestamp(object_values_timestamp_iso8601_tz) <= date('{self.end_date}')
-                and from_iso8601_timestamp(object_values_timestamp_iso8601_tz) <= date('{self.end_date}') - interval '6' day
-            group by cast(
-                    from_iso8601_timestamp(object_values_timestamp_iso8601_tz) as date
+                and (
+                    (object_values_timestamp >= {curr_start_ts} and object_values_timestamp < {curr_end_ts}) or
+                    (object_values_timestamp >= {prev_start_ts} and object_values_timestamp < {prev_end_ts})
                 )
-        ),
-        sprev as (
-            select cast(
-                    from_iso8601_timestamp(object_values_timestamp_iso8601_tz) as date
-                ) step_date,
-                sum(object_values_value) total_steps
-            from steps
-            where pid = 'BB-3234-3734'
-                and from_iso8601_timestamp(object_values_timestamp_iso8601_tz) <= date('{self.end_date}') - interval '7' day
-                and from_iso8601_timestamp(object_values_timestamp_iso8601_tz) <= date('{self.end_date}') - interval '13' day
-            group by cast(
-                    from_iso8601_timestamp(object_values_timestamp_iso8601_tz) as date
-                )
+            group by date(from_unixtime(object_values_timestamp / 1000)), 
+                case 
+                    when object_values_timestamp >= {curr_start_ts} and object_values_timestamp < {curr_end_ts} then 'current'
+                    when object_values_timestamp >= {prev_start_ts} and object_values_timestamp < {prev_end_ts} then 'previous'
+                    else 'unknown'
+                end
         )
-        select cast(floor(avg(scurr.total_steps)) as int) avg_curr,
-            cast(floor(avg(sprev.total_steps)) as int) avg_prev,
-            cast(floor(avg(scurr.total_steps)) - floor(avg(sprev.total_steps)) as int) "steps_changed"
-        from scurr
-            cross join sprev
+        select 
+            cast(floor(avg(case when period_type = 'current' then total_steps end)) as int) avg_curr,
+            cast(floor(avg(case when period_type = 'previous' then total_steps end)) as int) avg_prev
+        from daily_steps
         """
 
         movement = self.athena_uh.execQuery(query)
@@ -476,8 +513,12 @@ class Helper:
         avg_steps = None
         steps_changed = None
         try:
-            avg_steps = int(movement['avg_curr'][0])
-            steps_changed = int(movement['steps_changed'][0])
+            avg_curr = movement['avg_curr'][0]
+            avg_prev = movement['avg_prev'][0]
+            if avg_curr is not None:
+                avg_steps = int(avg_curr)
+            if avg_curr is not None and avg_prev is not None:
+                steps_changed = int(avg_curr) - int(avg_prev)
         except:
             return None
 
@@ -497,12 +538,18 @@ class Helper:
         if os.getenv('TEMPLATE_MODE', 'PRODUCTION') == 'PRESENT':
             return self._debugOutputs()
 
+        end_date_str = self.end_date.strftime('%Y-%m-%d')
+        start_date_str = self.start_date.strftime('%Y-%m-%d')
+
         query = f"""
-            with r1 as (
-            select cast(observationdate as date) "dates", value "symptom" from projectdevicedata
+            with date_range as (
+                select date('{start_date_str}') as start_date, date('{end_date_str}') as end_date
+            ),
+            r1 as (
+            select cast(observationdate as date) "dates", value "symptom" 
+            from projectdevicedata, date_range
                 where participantidentifier = '{self.participant_id}'
-                and cast(observationdate as date) <= cast('{self.end_date.isoformat()}' as date)
-                and cast(observationdate as date) >= cast('{self.end_date.isoformat()}' as date) - interval '6' day
+                and cast(observationdate as date) between date_range.start_date and date_range.end_date
                 and type = 'symptom'
                 and value != 'no_symptom'
             ),
@@ -514,7 +561,7 @@ class Helper:
 
             select symptom, total_count, cardinality("days") "days"
             from r2
-            order by days desc
+            order by days desc, symptom asc
             limit 5
         """
         topsymptoms = self.athena_mdh.execQuery(query)
