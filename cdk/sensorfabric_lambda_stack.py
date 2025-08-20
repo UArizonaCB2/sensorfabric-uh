@@ -125,7 +125,8 @@ class SensorFabricLambdaStack(Stack):
                 "memory_size": 1024,
                 "environment": {
                     "AWS_SECRET_NAME": self.config.aws_secret_name,
-                    "TEMPLATE_MODE": self.config.template_mode
+                    "TEMPLATE_MODE": self.config.template_mode,
+                    "SF_DATA_BUCKET": self.config.sf_data_bucket
                 }
             },
             "biobayb_uh_jwt_generator": {
@@ -135,7 +136,8 @@ class SensorFabricLambdaStack(Stack):
                 "memory_size": 1024,
                 "environment": {
                     "AWS_SECRET_NAME": self.config.aws_secret_name,
-                    "JWT_EXPIRATION_DAYS": self.config.jwt_expiration_days
+                    "JWT_EXPIRATION_DAYS": self.config.jwt_expiration_days,
+                    "SF_DATA_BUCKET": self.config.sf_data_bucket
                 }
             }
         }

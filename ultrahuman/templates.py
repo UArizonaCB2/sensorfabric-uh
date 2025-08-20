@@ -1,17 +1,11 @@
-from jinja2 import Environment, FileSystemLoader
-import datetime
-from typing import Dict, List, Any, Optional
+from typing import Dict, Any
 import json
 import logging
 import os
 import base64
 import boto3
 from botocore.exceptions import ClientError
-from sensorfabric.mdh import MDH
-from ultrahuman.helper import Helper
-import traceback
 import jwt
-# from ultrahuman.error_handling import handle_api_error
 
 
 logger = logging.getLogger()
@@ -38,23 +32,6 @@ class TemplateGenerator:
     
     def __init__(self, config: Dict[str, Any], **kwargs):
         self.__config = config
-        self.mdh = None
-
-    def _initialize_connections(self):
-        """Initialize MDH connection"""
-        try:
-            # Initialize MDH connection from env vars
-            mdh_configuration = {
-                'account_secret': self.__config.get('MDH_SECRET_KEY'),
-                'account_name': self.__config.get('MDH_ACCOUNT_NAME'),
-                'project_id': self.__config.get('MDH_PROJECT_ID'),
-            }
-            self.mdh = MDH(**mdh_configuration)
-            logger.info("MDH connection initialized successfully")
-            
-        except Exception as e:
-            logger.error(f"Failed to initialize MDH connection: {str(e)}")
-            raise
 
     def _validate_jwt_token(self, token: str) -> Dict[str, Any]:
         """
@@ -83,7 +60,7 @@ class TemplateGenerator:
             )
             
             # Validate required fields
-            required_fields = ['participant_id', 'start_date', 'end_date']
+            required_fields = ['participant_id', 's3_path']
             for field in required_fields:
                 if field not in payload:
                     raise jwt.InvalidTokenError(f"Missing required field: {field}")
@@ -107,97 +84,43 @@ class TemplateGenerator:
 
     def generate_weekly_report_template(
         self,
-        participant_id: str,
-        target_week: Optional[str] = None,
+        s3_path: str
     ) -> str:
         """
-        Generate a Jinja2 HTML template for weekly health reports from Ultrahuman API data.
+        Fetch pre-generated HTML template from S3.
         
         Args:
-            participant_id: ID of the participant to generate the report for
-            target_week: Optional week to generate the report for - this is the END week, inclusive.
+            s3_path: S3 path to the pre-generated HTML template
 
         Returns:
-            HTML string with populated template
+            HTML string from S3
             
         Raises:
-            Exception: If MDH connection fails
+            Exception: If S3 fetch fails
         """
-        # initialize connections if not already done
-        if self.mdh is None:
-            self._initialize_connections()
-
-        if target_week is None:
-            last_week_utc_timestamp = datetime.datetime.now().date()
-        else:
-            # Handle both string and date formats from JWT payload
-            if isinstance(target_week, str):
-                last_week_utc_timestamp = datetime.datetime.strptime(target_week, '%Y-%m-%d').date()
-            else:
-                last_week_utc_timestamp = target_week
-
-        config = {
-            'MDH_SECRET_KEY': self.__config.get('MDH_SECRET_KEY'),
-            'MDH_ACCOUNT_NAME': self.__config.get('MDH_ACCOUNT_NAME'),
-            'MDH_PROJECT_ID': self.__config.get('MDH_PROJECT_ID'),
-            # TODO: Move these over to secrets
-            'MDH_PROJECT_NAME': self.__config.get('MDH_PROJECT_NAME'),
-            'UH_DATABASE': self.__config.get('UH_DATABASE'),
-            'UH_WORKGROUP': self.__config.get('UH_WORKGROUP'),
-            'UH_S3_LOCATION': self.__config.get('UH_S3_LOCATION'),
-            'participant_id': participant_id,
-            'end_date': last_week_utc_timestamp,
-            'start_date': last_week_utc_timestamp - datetime.timedelta(days=7)
-        }
-
-        helper = Helper(config=config)
-        ringwear = helper.ringWearTime()
-        weight = helper.weightSummary()
-        movement = helper.movementSummary()
-        symptoms = helper.topSymptomsRecorded()
-        sleep = helper.sleepSummary()
-        temp = helper.temperatureSummary()
-        hr = helper.heartRateSummary()
-        bp = helper.bloodPressure()
-        weeks_enrolled = helper.weeksEnrolled()
-        ga_weeks = helper.weeksPregnant()
-        ema_count = helper.emaCompleted()
-
-        env = Environment(loader=FileSystemLoader('ultrahuman/templates'))
-        template = env.get_template('reportv2.html')
-
-        # Convert the start and end dates to something that user can read.
-        # TODO: If the dates are from different years then we should also show the year for
-        # start_str
-        start_str = config['start_date'].strftime("%B %d")
-        end_str = config['end_date'].strftime("%B %d, %Y")
-
-        data = dict(
-            ringwear=ringwear,
-            weeks_enrolled=weeks_enrolled,
-            current_pregnancy_week=ga_weeks,
-            surveys_completed=ema_count,
-            symptoms=symptoms,
-            weight=weight,
-            movement=movement,
-            sleep=sleep,
-            temp=temp,
-            hr=hr,
-            bp=bp,
-            # enabled flags (not currently used. Passing None to metrics disables them)
-            blood_pressure_enabled=True,
-            heart_rate_enabled=True,
-            temperature_enabled=True,
-            sleep_enabled=True,
-            weight_enabled=True,
-            movement_enabled=True,
-            start_str=start_str,
-            end_str=end_str
-        )
-
-        html = template.render(data)
-
-        return html
+        try:
+            # Parse S3 path to extract bucket and key
+            if not s3_path.startswith('s3://'):
+                raise ValueError(f"Invalid S3 path format: {s3_path}")
+            
+            s3_path_parts = s3_path[5:].split('/', 1)  # Remove 's3://' prefix
+            if len(s3_path_parts) != 2:
+                raise ValueError(f"Invalid S3 path format: {s3_path}")
+            
+            bucket_name = s3_path_parts[0]
+            object_key = s3_path_parts[1]
+            
+            # Fetch HTML content from S3
+            s3_client = boto3.client('s3')
+            response = s3_client.get_object(Bucket=bucket_name, Key=object_key)
+            html_content = response['Body'].read().decode('utf-8')
+            
+            logger.info(f"Successfully fetched template from S3: {s3_path}")
+            return html_content
+            
+        except Exception as e:
+            logger.error(f"Failed to fetch template from S3 path {s3_path}: {str(e)}")
+            raise Exception(f"Template fetch failed: {str(e)}")
 
 def get_secret():
     """
@@ -290,7 +213,7 @@ def lambda_handler(event, context):
             payload = generator._validate_jwt_token(jwt_token)
             logger.debug(f"Got payload: {payload}")
             participant_id = payload['participant_id']
-            target_date = payload.get('end_date')  # Use end_date as target_week
+            s3_path = payload['s3_path']
             
             logger.info(f"JWT authentication successful for participant {participant_id}")
             
@@ -305,10 +228,7 @@ def lambda_handler(event, context):
             }
 
         # Generate the report
-        html_report = generator.generate_weekly_report_template(
-            participant_id=participant_id,
-            target_week=target_date
-        )
+        html_report = generator.generate_weekly_report_template(s3_path)
 
         logger.debug(f"Template generation completed for participant {participant_id}")
         

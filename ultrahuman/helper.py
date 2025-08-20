@@ -388,8 +388,8 @@ class Helper:
             return None
 
         # Calculate trend here since we removed the CASE statement from SQL
-        curr_avg = float(temperature['curr_avg_temp'][0])
-        prev_avg = float(temperature['prev_avg_temp'][0])
+        curr_avg = int(temperature['curr_avg_temp'][0])
+        prev_avg = int(temperature['prev_avg_temp'][0])
 
         trend = 'steady'
         if curr_avg and prev_avg:
