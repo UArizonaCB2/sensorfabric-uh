@@ -52,7 +52,7 @@ discover_lambda_functions() {
     local functions_json
     functions_json=$(aws lambda list-functions \
         --region "$AWS_REGION" \
-        --query 'Functions[?contains(FunctionName, `_biobayb_uh_uploader_Lambda`) || contains(FunctionName, `_biobayb_uh_publisher_Lambda`) || contains(FunctionName, `_biobayb_uh_template_generator_Lambda`) || contains(FunctionName, `_biobayb_uh_jwt_generator_Lambda`)].FunctionName' \
+        --query 'Functions[?contains(FunctionName, `_biobayb_uh_uploader_Lambda`) || contains(FunctionName, `_biobayb_uh_publisher_Lambda`) || contains(FunctionName, `_biobayb_uh_template_generator_Lambda`) || contains(FunctionName, `_biobayb_uh_jwt_coordinator_Lambda`) || contains(FunctionName, `_biobayb_uh_jwt_worker_Lambda`)].FunctionName' \
         --output json 2>/dev/null || echo "[]")
     
     log_debug "Raw AWS response: $functions_json"
@@ -131,10 +131,10 @@ discover_lambda_functions() {
             local key="${project_name}-uh_template_generator"
             add_lambda_function "$key" "$func"
             log_info "Mapped $key -> $func"
-        elif [[ "$func" == *"_biobayb_uh_jwt_generator_Lambda" ]]; then
-            # Extract project name from function name (format: {project_name}_biobayb_uh_jwt_generator_Lambda)
-            local project_name="${func%_biobayb_uh_jwt_generator_Lambda}"
-            log_debug "Extracted project name for JWT generator: '$project_name'"
+        elif [[ "$func" == *"_biobayb_uh_jwt_coordinator_Lambda" ]]; then
+            # Extract project name from function name (format: {project_name}_biobayb_uh_jwt_coordinator_Lambda)
+            local project_name="${func%_biobayb_uh_jwt_coordinator_Lambda}"
+            log_debug "Extracted project name for JWT coordinator: '$project_name'"
             
             # Apply stack filter if specified (match against project name)
             if [ -n "$STACK_FILTER" ] && [ "$project_name" != "$STACK_FILTER" ]; then
@@ -142,7 +142,21 @@ discover_lambda_functions() {
                 continue
             fi
             
-            local key="${project_name}-uh_jwt_generator"
+            local key="${project_name}-uh_jwt_coordinator"
+            add_lambda_function "$key" "$func"
+            log_info "Mapped $key -> $func"
+        elif [[ "$func" == *"_biobayb_uh_jwt_worker_Lambda" ]]; then
+            # Extract project name from function name (format: {project_name}_biobayb_uh_jwt_worker_Lambda)
+            local project_name="${func%_biobayb_uh_jwt_worker_Lambda}"
+            log_debug "Extracted project name for JWT worker: '$project_name'"
+            
+            # Apply stack filter if specified (match against project name)
+            if [ -n "$STACK_FILTER" ] && [ "$project_name" != "$STACK_FILTER" ]; then
+                log_debug "Skipping $func (not in filtered stack: $STACK_FILTER)"
+                continue
+            fi
+            
+            local key="${project_name}-uh_jwt_worker"
             add_lambda_function "$key" "$func"
             log_info "Mapped $key -> $func"
         else
@@ -880,15 +894,19 @@ health_check() {
 deploy_pipeline() {
     local deployment_method=${1:-"direct"}
     local skip_tests=${2:-false}
+    local skip_s3_check=${3:-false}
     
     log_header "Starting deployment pipeline (method: $deployment_method)..."
     
     # Validate prerequisites
     validate_prerequisites
     
-    # Security check - ensure no public S3 buckets exist
-    check_public_s3_buckets
-    
+    # Security check - ensure no public S3 buckets exist (unless skipped)
+    if [ "$skip_s3_check" = false ]; then
+        check_public_s3_buckets
+    else
+        log_warning "Skipping S3 bucket security check (--skip-s3-check enabled)"
+    fi
     
     # Run build pipeline
     build_pipeline
@@ -927,6 +945,7 @@ deploy_pipeline() {
 main() {
     local deployment_method="direct"
     local skip_tests=false
+    local skip_s3_check=false
     local action="deploy"
     
     while [[ $# -gt 0 ]]; do
@@ -937,6 +956,10 @@ main() {
                 ;;
             --skip-tests)
                 skip_tests=true
+                shift
+                ;;
+            --skip-s3-check)
+                skip_s3_check=true
                 shift
                 ;;
             --build-only)
@@ -976,6 +999,7 @@ Comprehensive deployment automation for Ultrahuman SensorFabric Lambda functions
 Options:
   --cdk                 Use CDK for deployment instead of direct Lambda updates
   --skip-tests          Skip function testing after deployment
+  --skip-s3-check       Skip S3 bucket security check (speeds up deployment)
   --build-only          Only build and push images, don't deploy
   --deploy-only         Only deploy (assumes images already exist in ECR)
   --health-check        Perform health check only
@@ -987,6 +1011,7 @@ Options:
 Examples:
   $0                    # Build and deploy with direct Lambda updates
   $0 --cdk              # Build and deploy using CDK
+  $0 --skip-s3-check    # Deploy without S3 security check (faster)
   $0 --build-only       # Only build and push to ECR
   $0 --deploy-only      # Only deploy from existing ECR images
   $0 --skip-tests       # Deploy without running tests
@@ -1010,16 +1035,24 @@ EOF
     
     case $action in
         deploy)
-            deploy_pipeline "$deployment_method" "$skip_tests"
+            deploy_pipeline "$deployment_method" "$skip_tests" "$skip_s3_check"
             ;;
         build-only)
             validate_prerequisites
-            check_public_s3_buckets
+            if [ "$skip_s3_check" = false ]; then
+                check_public_s3_buckets
+            else
+                log_warning "Skipping S3 bucket security check (--skip-s3-check enabled)"
+            fi
             build_pipeline
             ;;
         deploy-only)
             validate_prerequisites
-            check_public_s3_buckets
+            if [ "$skip_s3_check" = false ]; then
+                check_public_s3_buckets
+            else
+                log_warning "Skipping S3 bucket security check (--skip-s3-check enabled)"
+            fi
             if [ "$deployment_method" = "cdk" ]; then
                 deploy_with_cdk
             else

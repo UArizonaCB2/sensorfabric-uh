@@ -10,6 +10,7 @@ import hashlib
 import json
 import functools
 from typing import Dict, Any, Optional, Tuple
+import logging
 
 """
 Current Limitations
@@ -17,6 +18,17 @@ Current Limitations
 1. We don't have any data inside GoogleFit or HealthConnect for Android phones. Hence we are not able to test
     out weight data going into it.
 """
+logger = logging.getLogger()
+DEFAULT_LOG_LEVEL = os.getenv('LOG_LEVEL', logging.INFO)
+
+if logging.getLogger().hasHandlers():
+    logging.getLogger().setLevel(DEFAULT_LOG_LEVEL)
+else:
+    logging.basicConfig(level=DEFAULT_LOG_LEVEL)
+
+logging.getLogger("boto3").setLevel(logging.WARNING)
+logging.getLogger("botocore").setLevel(logging.WARNING)
+
 
 class ParticipantNotEnrolled(Exception):
     """Raised when the participant is not enrolled in the study."""
@@ -388,8 +400,14 @@ class Helper:
             return None
 
         # Calculate trend here since we removed the CASE statement from SQL
-        curr_avg = int(temperature['curr_avg_temp'][0])
-        prev_avg = int(temperature['prev_avg_temp'][0])
+        curr_avg_raw = temperature['curr_avg_temp'][0]
+        prev_avg_raw = temperature['prev_avg_temp'][0]
+
+        curr_avg = float(curr_avg_raw) if curr_avg_raw is not None else None
+        prev_avg = float(prev_avg_raw) if prev_avg_raw is not None else None
+
+        if curr_avg is None or prev_avg is None:
+            return None
 
         trend = 'steady'
         if curr_avg and prev_avg:

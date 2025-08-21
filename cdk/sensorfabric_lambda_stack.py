@@ -11,6 +11,8 @@ from aws_cdk import (
     aws_sqs as sqs,
     aws_events as events,
     aws_events_targets as targets,
+    aws_stepfunctions as stepfunctions,
+    aws_stepfunctions_tasks as stepfunctions_tasks,
     Tags,
     Duration,
     Stack,
@@ -129,11 +131,21 @@ class SensorFabricLambdaStack(Stack):
                     "SF_DATA_BUCKET": self.config.sf_data_bucket
                 }
             },
-            "biobayb_uh_jwt_generator": {
-                "description": "UltraHuman JWT token generator Lambda function",
-                "handler": "ultrahuman.uh_jwt_generator.lambda_handler",
+            "biobayb_uh_jwt_coordinator": {
+                "description": "UltraHuman JWT coordinator Lambda function for Step Functions",
+                "handler": "ultrahuman.uh_jwt_coordinator.lambda_handler",
                 "timeout": Duration.minutes(10),
                 "memory_size": 1024,
+                "environment": {
+                    "AWS_SECRET_NAME": self.config.aws_secret_name,
+                    "JWT_BATCH_SIZE": "10"
+                }
+            },
+            "biobayb_uh_jwt_worker": {
+                "description": "UltraHuman JWT worker Lambda function for Step Functions",
+                "handler": "ultrahuman.uh_jwt_worker.lambda_handler",
+                "timeout": Duration.minutes(15),
+                "memory_size": 2048,
                 "environment": {
                     "AWS_SECRET_NAME": self.config.aws_secret_name,
                     "JWT_EXPIRATION_DAYS": self.config.jwt_expiration_days,
@@ -165,6 +177,9 @@ class SensorFabricLambdaStack(Stack):
 
         self.subscribe_sns_to_lambda()
 
+        # Create Step Functions state machine (after Lambda functions)
+        self.create_stepfunctions_resources()
+        
         # Create EventBridge rules for scheduling
         self.create_eventbridge_rules()
 
@@ -233,7 +248,13 @@ class SensorFabricLambdaStack(Stack):
                 "sqs:SendMessage",
                 "sqs:ReceiveMessage",
                 "sqs:DeleteMessage",
-                "sqs:GetQueueAttributes"
+                "sqs:GetQueueAttributes",
+                
+                # Step Functions permissions
+                "states:StartExecution",
+                "states:DescribeExecution",
+                "states:DescribeStateMachine",
+                "states:ListExecutions"
             ],
             resources=["*"]
         )
@@ -402,6 +423,105 @@ class SensorFabricLambdaStack(Stack):
             description="ARN for UltraHuman publisher dead letter queue"
         )
 
+    def create_stepfunctions_resources(self) -> None:
+        """Create Step Functions state machine for JWT generation."""
+        
+        # Create Step Functions execution role
+        stepfunctions_role = iam.Role(
+            self, f"{self.config.project_name}_StepFunctionsExecutionRole",
+            assumed_by=iam.ServicePrincipal("states.amazonaws.com"),
+            managed_policies=[
+                iam.ManagedPolicy.from_aws_managed_policy_name("service-role/AWSLambdaBasicExecutionRole")
+            ]
+        )
+        
+        # Add Lambda invoke permissions
+        stepfunctions_role.add_to_policy(
+            iam.PolicyStatement(
+                effect=iam.Effect.ALLOW,
+                actions=["lambda:InvokeFunction"],
+                resources=[
+                    self.lambda_functions["biobayb_uh_jwt_worker"].function_arn,
+                    f"{self.lambda_functions['biobayb_uh_jwt_worker'].function_arn}:*"
+                ]
+            )
+        )
+        
+        # Create worker Lambda task
+        worker_task = stepfunctions_tasks.LambdaInvoke(
+            self, "ProcessParticipantJWT",
+            lambda_function=self.lambda_functions["biobayb_uh_jwt_worker"],
+            input_path="$",
+            result_path="$.result",
+            retry_on_service_exceptions=True
+        )
+        
+        # Create Map state for parallel processing
+        map_state = stepfunctions.Map(
+            self, "ProcessParticipants",
+            items_path="$.participants",
+            max_concurrency=10
+        )
+        
+        # Create a Pass state to transform the input for each item
+        transform_input = stepfunctions.Pass(
+            self, "TransformInput",
+            parameters={
+                "participant_id.$": "$.participant_id",
+                "start_date.$": "$$.Execution.Input.start_date",
+                "end_date.$": "$$.Execution.Input.end_date", 
+                "update_mdh": True
+            }
+        )
+        
+        # Chain the transform and worker task
+        item_chain = transform_input.next(worker_task)
+        
+        # Set the item processor for the Map state
+        map_state.item_processor(item_chain)
+        
+        # Create Pass state for success
+        success_state = stepfunctions.Pass(
+            self, "AllParticipantsProcessed",
+            result=stepfunctions.Result.from_object({
+                "status": "SUCCESS",
+                "message": "All participants processed successfully"
+            })
+        )
+        
+        # Create the state machine definition
+        definition = map_state.next(success_state)
+        
+        # Create the state machine
+        self.jwt_state_machine = stepfunctions.StateMachine(
+            self, f"{self.config.project_name}_JWTStateMachine",
+            state_machine_name=f"{self.config.project_name}-jwt-generation",
+            definition_body=stepfunctions.DefinitionBody.from_chainable(definition),
+            role=stepfunctions_role,
+            timeout=Duration.minutes(60),
+            logs=stepfunctions.LogOptions(
+                destination=logs.LogGroup(
+                    self, f"{self.config.project_name}_StepFunctionsLogGroup",
+                    log_group_name=f"/aws/stepfunctions/{self.config.project_name}-jwt-generation",
+                    retention=logs.RetentionDays.INFINITE,
+                    removal_policy=RemovalPolicy.RETAIN
+                ),
+                level=stepfunctions.LogLevel.ALL
+            )
+        )
+        
+        # Output the state machine ARN
+        cdk.CfnOutput(
+            self, f"{self.config.project_name}_JWTStateMachineARN",
+            value=self.jwt_state_machine.state_machine_arn,
+            description="ARN for UltraHuman JWT generation Step Functions state machine"
+        )
+        
+        # Add Step Functions state machine ARN to coordinator
+        if "biobayb_uh_jwt_coordinator" in self.lambda_functions:
+            coordinator_lambda = self.lambda_functions["biobayb_uh_jwt_coordinator"]
+            coordinator_lambda.add_environment("JWT_STATE_MACHINE_ARN", self.jwt_state_machine.state_machine_arn)
+
     def create_eventbridge_rules(self) -> None:
         """Create EventBridge rules for scheduled Lambda executions using aliases."""
         
@@ -439,20 +559,20 @@ class SensorFabricLambdaStack(Stack):
                 targets.LambdaFunction(self.lambda_aliases["biobayb_uh_uploader"])
             )
 
-        # Manual trigger capability for JWT generator
-        if "biobayb_uh_jwt_generator" in self.lambda_aliases:
+        # Manual trigger capability for JWT coordinator  
+        if "biobayb_uh_jwt_coordinator" in self.lambda_aliases:
             # This creates a custom event pattern that can be triggered manually
-            jwt_generator_rule = events.Rule(
-                self, f"{self.config.project_name}_UHJWTGeneratorManualTriggerRule",
-                description="Manual trigger for UltraHuman JWT generator",
+            jwt_coordinator_rule = events.Rule(
+                self, f"{self.config.project_name}_UHJWTCoordinatorManualTriggerRule",
+                description="Manual trigger for UltraHuman JWT coordinator",
                 event_pattern=events.EventPattern(
                     source=["sensorfabric.manual"],
                     detail_type=["UltraHuman JWT Generation Request"]
                 )
             )
             
-            jwt_generator_rule.add_target(
-                targets.LambdaFunction(self.lambda_aliases["biobayb_uh_jwt_generator"])
+            jwt_coordinator_rule.add_target(
+                targets.LambdaFunction(self.lambda_aliases["biobayb_uh_jwt_coordinator"])
             )
 
     def update_lambda_environment_variables(self) -> None:
@@ -468,3 +588,4 @@ class SensorFabricLambdaStack(Stack):
         if "biobayb_uh_uploader" in self.lambda_functions:
             uploader_lambda = self.lambda_functions["biobayb_uh_uploader"]
             uploader_lambda.add_environment("UH_DLQ_URL", self.uh_dlq.queue_url)
+        
