@@ -570,8 +570,24 @@ class SensorFabricLambdaStack(Stack):
                     detail_type=["UltraHuman JWT Generation Request"]
                 )
             )
-            
+
             jwt_coordinator_rule.add_target(
+                targets.LambdaFunction(self.lambda_aliases["biobayb_uh_jwt_coordinator"])
+            )
+
+            jwt_coordinator_schedule_rule = events.Rule(
+                self, f"{self.config.project_name}_UHJWTCoordinatorScheduleRule",
+                description="Schedule for UltraHuman JWT coordinator",
+                schedule=events.Schedule.cron(
+                    minute="0",
+                    hour="7",
+                    week_day="SUN",
+                    month="*",
+                    year="*"
+                )
+            )
+
+            jwt_coordinator_schedule_rule.add_target(
                 targets.LambdaFunction(self.lambda_aliases["biobayb_uh_jwt_coordinator"])
             )
 
