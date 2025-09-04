@@ -276,9 +276,9 @@ class Helper:
             union all
             select * from previous_week
         """
-
         combined_data: pd.DataFrame = self.athena_mdh.execQuery(combined_query)
-        
+        combined_data['systolic'] = pd.to_numeric(combined_data['systolic'], errors='coerce', downcast='float')
+        combined_data['diastolic'] = pd.to_numeric(combined_data['diastolic'], errors='coerce', downcast='float')
         # Split the results back into current and previous weeks
         this_week = combined_data[combined_data['week_type'] == 'current'][['systolic', 'diastolic']]
         previous_week = combined_data[combined_data['week_type'] == 'previous'][['systolic', 'diastolic']]
