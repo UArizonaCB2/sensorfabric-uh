@@ -316,7 +316,7 @@ class SensorFabricLambdaStack(Stack):
 
             # Add Function URL for template generator
             if function_name == "biobayb_uh_template_generator":
-                function_url = lambda_function.add_function_url(
+                self.template_generator_function_url = lambda_function.add_function_url(
                     auth_type=lambda_.FunctionUrlAuthType.NONE,
                     cors=lambda_.FunctionUrlCorsOptions(
                         allowed_origins=["*"],
@@ -328,16 +328,16 @@ class SensorFabricLambdaStack(Stack):
                 # Output the Function URL
                 cdk.CfnOutput(
                     self, f"{self.config.project_name}_{function_name}_FunctionURL",
-                    value=function_url.url,
+                    value=self.template_generator_function_url.url,
                     description=f"Function URL for {self.config.project_name}_{function_name} Lambda function"
                 )
 
-            # Output the Lambda function ARN
-            cdk.CfnOutput(
-                self, f"{self.config.project_name}_{function_name}_Lambda_ARN",
-                value=lambda_function.function_arn,
-                description=f"ARN for {self.config.project_name}_{function_name} Lambda function"
-            )
+                # Output the Lambda function ARN
+                cdk.CfnOutput(
+                    self, f"{self.config.project_name}_{function_name}_Lambda_ARN",
+                    value=lambda_function.function_arn,
+                    description=f"ARN for {self.config.project_name}_{function_name} Lambda function"
+                )
         
         # Add dynamic environment variables after all resources are created
         self.update_lambda_environment_variables()
@@ -605,3 +605,7 @@ class SensorFabricLambdaStack(Stack):
             uploader_lambda = self.lambda_functions["biobayb_uh_uploader"]
             uploader_lambda.add_environment("UH_DLQ_URL", self.uh_dlq.queue_url)
         
+        # Add template generator function URL to JWT worker
+        if "biobayb_uh_jwt_worker" in self.lambda_functions and hasattr(self, 'template_generator_function_url'):
+            jwt_worker_lambda = self.lambda_functions["biobayb_uh_jwt_worker"]
+            jwt_worker_lambda.add_environment("TEMPLATE_GENERATOR_URL", self.template_generator_function_url.url)

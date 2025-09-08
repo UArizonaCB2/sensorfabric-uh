@@ -48,6 +48,9 @@ class UltrahumanJWTWorker:
         
         # JWT expiration (7 days by default)
         self.jwt_expiration_days = int(os.getenv('JWT_EXPIRATION_DAYS', 7))
+        self.function_url = os.getenv('TEMPLATE_GENERATOR_URL', None)
+        if not self.function_url:
+            raise ValueError("TEMPLATE_GENERATOR_URL not found in environment configuration")
 
     def _initialize_connections(self):
         """Initialize MDH connection"""
@@ -162,12 +165,13 @@ class UltrahumanJWTWorker:
         """
         try:
             # Update custom fields with JWT token
+            user_url = f'{self.function_url}?t={jwt_token}'
             update_data = [{
                 'participantIdentifier': participant_id,
-                'customFields': {'report_jwt': jwt_token}
+                'customFields': {'report_jwt': user_url}
             }]
             self.mdh.update_participants(update_data)
-            
+
             logger.info(f"Updated participant {participant_id} custom fields with JWT token")
             return True
             
