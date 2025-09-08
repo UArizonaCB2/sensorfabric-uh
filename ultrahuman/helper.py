@@ -544,7 +544,7 @@ class Helper:
                 'total_movements_mins': None,
                 'average_steps_int': self._addCommas(avg_steps),
                 # Trend can return a positive or negative value.
-                'trend': self._addCommas(steps_changed),
+                'trend': self._addCommas(steps_changed) if steps_changed is not None else steps_changed,
             }
 
     def topSymptomsRecorded(self):
