@@ -17,7 +17,6 @@ import pytz
 import io
 
 # Configure logging
-logger = logging.getLogger()
 DEFAULT_LOG_LEVEL = os.getenv('LOG_LEVEL', logging.INFO)
 WHITELISTED_TABLES = [
     'avg_sleep_hrv',
@@ -46,6 +45,7 @@ else:
 # suppress boto3 verbose logging
 logging.getLogger("boto3").setLevel(logging.WARNING)
 logging.getLogger("botocore").setLevel(logging.WARNING)
+logger = logging.getLogger()
 
 DEFAULT_DATABASE_NAME = 'uh-biobayb-dev'
 DEFAULT_PROJECT_NAME = 'uh-biobayb-dev'

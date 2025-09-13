@@ -5,12 +5,26 @@ from datetime import datetime
 from typing import Optional, Dict, Any
 import re
 import awswrangler as wr
+import logging
 
-
+DEFAULT_LOG_LEVEL = os.getenv('LOG_LEVEL', logging.INFO)
 DEVELOPMENT_EMAIL = "shresth@ultrahuman.com"
 DEFAULT_PROD_BASE_URL = "https://partner.ultrahuman.com/api/v1/metrics"
 DEFAULT_DEV_BASE_URL = 'https://www.staging.ultrahuman.com/api/v1/metrics'
 DEFAULT_DEV_API_KEY = 'eyJhbGciOiJIUzI1NiJ9.eyJzZWNyZXQiOiJjZGM5MjdkYjQ3ZjA5ZDhhNzQxYiIsImV4cCI6MjQzMDEzNTM5Nn0.x3SqFIubvafBxZ1GxvPRqHCd0CLa4_jip8LHbopzLsQ'
+
+
+if logging.getLogger().hasHandlers():
+    # The Lambda environment pre-configures a handler logging to stderr. If a handler is already configured,
+    # `.basicConfig` does not execute. Thus we set the level directly.
+    logging.getLogger().setLevel(DEFAULT_LOG_LEVEL)
+else:
+    logging.basicConfig(level=DEFAULT_LOG_LEVEL)
+
+# suppress boto3 verbose logging
+logging.getLogger("boto3").setLevel(logging.WARNING)
+logging.getLogger("botocore").setLevel(logging.WARNING)
+logger = logging.getLogger()
 
 
 class UltrahumanAPI:
