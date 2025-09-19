@@ -14,7 +14,7 @@ from ultrahuman.utils import flatten_json_to_columns, convert_dict_timestamps
 from ultrahuman.error_handling import handle_api_error, RetryableError
 import pandas as pd
 import pytz
-
+import io
 
 # Configure logging
 logger = logging.getLogger()
@@ -49,7 +49,7 @@ logging.getLogger("botocore").setLevel(logging.WARNING)
 
 DEFAULT_DATABASE_NAME = 'uh-biobayb-dev'
 DEFAULT_PROJECT_NAME = 'uh-biobayb-dev'
-DEFAULT_TIMEZONE = 'America/Phoenix'
+DEFAULT_TIMEZONE = 'UTC'
 
 
 class UltrahumanDataUploader:
@@ -124,7 +124,7 @@ class UltrahumanDataUploader:
         """Set the target date for data collection."""
         if not target_date:
             # Default to yesterday to ensure data is available
-            self.target_date = datetime.datetime.strftime((datetime.datetime.now() - datetime.timedelta(days=1)), '%Y-%m-%d')
+            self.target_date = datetime.datetime.strftime(datetime.datetime.now(datetime.UTC), '%Y-%m-%d')
         else:
             self.target_date = target_date
 
@@ -144,6 +144,7 @@ class UltrahumanDataUploader:
         Returns:
             Dict with processing results including record count and max timestamp
         """
+
         metric_type = metric.get('type') if isinstance(metric, dict) else None
         if not metric_type:
             logger.info(f"Empty metric data: {metric_type}")
@@ -182,6 +183,9 @@ class UltrahumanDataUploader:
             logger.info(f"No new data after timestamp filtering: {metric_type}")
             return {'record_count': 0, 'max_timestamp': max_timestamp}
 
+        # Go ahead and also add the timezone as a column to the frame.
+        df['timezone'] = timezone
+
         if self.dry_run:
             logger.info(f"Dry run: would upload {len(df)} records for {metric_type}")
             return {'record_count': len(df), 'max_timestamp': max_timestamp}
@@ -211,6 +215,39 @@ class UltrahumanDataUploader:
         except Exception as e:
             logger.error(f"Failed to upload data to S3: {str(e)}")
             return {'record_count': 0, 'max_timestamp': max_timestamp}
+
+    def _upload_json_data(self, json_obj: Dict[str, Any], participant_id: str, data_date: datetime.date) -> bool:
+        """Upload raw JSON data to partitioned S3 path
+
+        Args:
+            json_obj: Json dictionary object that we wish to upload
+            participant_id : MDH participant id
+            data_date: date for this json file
+
+        Returns:
+            True if JSON was successfully uploaded to S3, False otherwise
+        """
+
+        if self.dry_run:
+            return True
+
+        # For MDH each file has a single JSON record. So not worried about contatinating
+        # multiple JSON records into a single new-line sepearated json file.
+        json_str = json.dumps(json_obj)
+        # Creating an in memory buffer. utf-8 should be good. Don't think we have any odd strings.
+        json_buffer = io.BytesIO(json_str.encode('utf-8'))
+
+        # Upload everything to s3
+        try:
+            wr.s3.upload(
+                local_file=json_buffer,
+                path=f"s3://{self.data_bucket}/raw/json/pid={participant_id}/date={data_date.isoformat()}/data.json"
+            )
+        except Exception as e:
+            logger.error(f"Failed to upload raw JSON data to S3: {str(e)}")
+            return False
+
+        return True
 
     def _process_sns_message(self, sns_message: Dict[str, Any]) -> Dict[str, Any]:
         """Process SNS message to extract participant data.
@@ -275,7 +312,6 @@ class UltrahumanDataUploader:
             email = participant.get('email')
         if 'uh_email' in participant and participant.get('uh_email') is not None and participant.get('uh_email') != '':
             email = participant.get('uh_email')
-        timezone = demographics.get('timeZone', DEFAULT_TIMEZONE)
 
         # Use target_date from SNS message if available, otherwise use instance target_date
         target_date = participant.get('target_date', self.target_date)
@@ -283,93 +319,158 @@ class UltrahumanDataUploader:
         if not email:
             logger.warning(f"No email found for participant {participant_id}")
             return {'participant_id': participant_id, 'success': False, 'error': 'No email found'}
-        # new uh_sync_timestamp for athena syncing
-        uh_sync_timestamp = participant.get('uh_sync_timestamp', None)
-        if uh_sync_timestamp is not None:
-            uh_sync_timestamp = int(datetime.datetime.fromisoformat(uh_sync_timestamp).timestamp())
-            logger.debug(f"Found uh_sync_timestamp: {uh_sync_timestamp}")
+
+        # Get when we last synced data for this participant.
+        custom_fields = participant.get('customFields', {})
+        uh_sync_date = custom_fields.get('uh_sync_date', None)
+        logger.info(f"uh_sync_date - {uh_sync_date}")
+        if uh_sync_date is None or len(uh_sync_date) <= 0:
+            logger.info("No uh_sync_date found. Falling back to uh_start_date")
+            # Fall back to `uh_start_date` if `uh_sync_timestamp` is None
+            uh_sync_date = custom_fields.get('uh_start_date', None)
+
+        if uh_sync_date is not None and len(uh_sync_date) > 0:
+            # MDH returns this in UTC timezone
+            try:
+                uh_sync_date = datetime.date.fromisoformat(uh_sync_date)
+            except ValueError:
+                logger.error(f"Unable to convert {uh_sync_date} into a valid datetime.date object. Format should be YYYY-MM-DD")
+
+            logger.info(f"Found starting timestamp: {uh_sync_date}")
         else:
-            logger.debug("No uh_sync_timestamp found")
+            logger.info("No uh_sync_date or uh_start_date is found or set. This participant will be ignored")
+            return {
+                'participant_id': participant_id,
+                'success': False,
+                'error': 'Neither uh_sync_timestamp or uh_start_date is set'
+            }
 
+        # Also get the epoch value from MDH or set to 0 if it is not present.
+        uh_sync_epoch = custom_fields.get('uh_sync_epoch', '')
+        uh_sync_epoch = int(uh_sync_epoch) if uh_sync_epoch.isnumeric() else 0
+
+        # Right now we will only support looking back 45 days.
+        MAX_SYNC_DAYS = 45
+        last_uh_timestamp = uh_sync_epoch
+        # This now holds the total record count for all days
         record_count = 0
-        # Get DataFrame for this participant and date
-        try:
-            json_obj = self.uh_api.get_metrics(email, target_date)
-        except Exception as e:
-            # Handle UH API errors
-            error_data = {
-                'participant_id': participant_id,
-                'email': email,
-                'target_date': target_date,
-                'operation': 'uh_api_get_metrics'
-            }
-            handle_api_error(e, error_data, 'uh_api_get_metrics')
-            # If we reach here, it's a non-retryable error that was sent to DLQ
-            return {
-                'participant_id': participant_id,
-                'success': False,
-                'error': f'Non-retryable UH API error: {str(e)}'
-            }
-        # we may want to store the raw json file alongside the parquet files.
-        # pull out UH keys -
-        # response structure is {"data": {"metric_data": [{}]}
-        data = json_obj.get('data', {})
-        if type(data) == list:
-            return {
-                'participant_id': participant_id,
-                'success': False,
-                'error': 'No data found'
-            }
-        metrics_data = data.get('metric_data', [])
-        last_uh_timestamp = 0
+        while uh_sync_date <= datetime.date.fromisoformat(target_date):
+            logger.info(f"uh_sync_timestamp - {uh_sync_date}")
 
-        for metric in metrics_data:
-            metric_type = metric.get('type') if isinstance(metric, dict) else None
-            if not metric_type:
+            # Get DataFrame for this participant and date
+            try:
+                json_obj = self.uh_api.get_metrics(email, uh_sync_date.strftime('%Y-%m-%d'))
+            except Exception as e:
+                # Handle UH API errors
+                error_data = {
+                    'participant_id': participant_id,
+                    'email': email,
+                    'target_date': target_date,
+                    'operation': 'uh_api_get_metrics'
+                }
+                handle_api_error(e, error_data, 'uh_api_get_metrics')
+                # If we reach here, it's a non-retryable error that was sent to DLQ
+                return {
+                    'participant_id': participant_id,
+                    'success': False,
+                    'error': f'Non-retryable UH API error: {str(e)}'
+                }
+
+            # Upload the raw JSON S3.
+            res = self._upload_json_data(json_obj, participant_id, uh_sync_date)
+            if not res:
+                logger.error(f"Failed to upload raw json data for {participant_id} for {uh_sync_date.isoformat()}")
+
+            # pull out UH keys -
+            # response structure is {"data": {"metric_data": [{}]}
+            data = json_obj.get('data', {})
+            # Going to save this raw json data into S3.
+            # UH is horrible at being consistent with their outputs when there is no data,
+            # so this is a horrible hack.
+            # Get data sizes for all metrics.
+            mmap = {}
+            for metrics in data.get('metric_data', []):
+                values = metrics.get('object', {}).get('values', [])
+                count = len(values)
+                last_timestamp = values[-1].get('timestamp', 0) if len(values) > 0 else 0
+                mmap[metrics.get('type', 'unkown')] = {
+                    'count': count,
+                    'last_timestamp': last_timestamp,
+                }
+
+            logger.info(f"UH metric counts {participant_id} is {mmap} on {uh_sync_date.isoformat()}")
+            # We are going to use temperature as our north star. If that is not there or there is no data
+            # we cowardly refuse to process this or do anything for this day.
+            if ('temp' not in mmap) or mmap.get('temp').get('count') <= 0:
+                # Just move on to the next day.
+                uh_sync_date += datetime.timedelta(days=1)
                 continue
 
-            # Process Sleep metrics with special handling for embedded sub-metrics
-            if metric_type == 'Sleep':
-                logger.debug(f"Processing Sleep metric.")
-                sleep_obj = metric.get('object')
-                for obj in sleep_obj.items():
-                    if obj[0] not in WHITELISTED_TABLES:
-                        logger.debug(f"Skipping {obj[0]} as it is not whitelisted.")
-                        continue
-                    newObj = {'type': obj[0], 'object': copy.deepcopy(obj[1])}
-                    result = self._process_metric_data(newObj, participant_id, email, target_date, timezone, uh_sync_timestamp, bedtime_start=sleep_obj.get('bedtime_start'), bedtime_end=sleep_obj.get('bedtime_end'))
-                    record_count += result['record_count']
-                    if result['max_timestamp'] > last_uh_timestamp:
-                        last_uh_timestamp = result['max_timestamp']
-                    logger.debug(f"Processed {newObj['type']}: {result['record_count']} records, max_timestamp: {result['max_timestamp']}")
-            else:
-                # Process standard metrics
-                if metric_type not in WHITELISTED_TABLES:
-                    logger.debug(f"Skipping {metric_type} as it is not whitelisted.")
+            # Given that timestamps in every metric are all over the place, and our primary end-point
+            # is temperature, we are going to use temperature as our anchor and check for `last_uh_timestamp`
+            if last_uh_timestamp >= mmap.get('temp').get('last_timestamp'):
+                # Yee we have everything, from this day. Why we are here, is a mystery. Let's move to the next day.
+                uh_sync_date += datetime.timedelta(days=1)
+                continue
+
+            uh_latest_timezone = data.get('latest_time_zone', DEFAULT_TIMEZONE)
+            if type(data) == list:
+                return {
+                    'participant_id': participant_id,
+                    'success': False,
+                    'error': 'No data found'
+                }
+            metrics_data = data.get('metric_data', [])
+
+            for metric in metrics_data:
+                metric_type = metric.get('type') if isinstance(metric, dict) else None
+                if not metric_type:
                     continue
-                result = self._process_metric_data(metric, participant_id, email, target_date, timezone, uh_sync_timestamp, bedtime_start=None, bedtime_end=None)
-                # Update record count and timestamp tracking
-                record_count += result['record_count']
-                if result['max_timestamp'] > last_uh_timestamp:
-                    last_uh_timestamp = result['max_timestamp']
 
-            logger.debug(f"Processed {metric_type}: {result['record_count']} records, max_timestamp: {result['max_timestamp']}")
+                # Process Sleep metrics with special handling for embedded sub-metrics
+                if metric_type == 'Sleep':
+                    logger.debug(f"Processing Sleep metric.")
+                    sleep_obj = metric.get('object')
+                    for obj in sleep_obj.items():
+                        if obj[0] not in WHITELISTED_TABLES:
+                            logger.debug(f"Skipping {obj[0]} as it is not whitelisted.")
+                            continue
+                        newObj = {'type': obj[0], 'object': copy.deepcopy(obj[1])}
+                        result = self._process_metric_data(newObj, participant_id, email, uh_sync_date.strftime('%Y-%m-%d'), uh_latest_timezone, last_uh_timestamp, bedtime_start=sleep_obj.get('bedtime_start'), bedtime_end=sleep_obj.get('bedtime_end'))
+                        record_count += result['record_count']
+                        logger.debug(f"Processed {newObj['type']}: {result['record_count']} records, max_timestamp: {mmap.get('temp').get('last_timestamp')}")
+                else:
+                    # Process standard metrics
+                    if metric_type not in WHITELISTED_TABLES:
+                        logger.debug(f"Skipping {metric_type} as it is not whitelisted.")
+                        continue
+                    result = self._process_metric_data(metric, participant_id, email, uh_sync_date.strftime('%Y-%m-%d'), uh_latest_timezone, last_uh_timestamp, bedtime_start=None, bedtime_end=None)
+                    # Update record count and timestamp tracking
+                    record_count += result['record_count']
 
-        if self.dry_run:
-            logger.info(f"Dry run: would upload {record_count} records for participant {participant_id}")
-            return {
-                'participant_id': participant_id,
-                'success': True,
-                'record_count': record_count,
-                'dry_run': True
-            }
+                logger.debug(f"Processed {metric_type}: {result['record_count']} records, max_timestamp: {mmap.get('temp').get('last_timestamp')}")
 
-        if record_count > 0:
-            logger.debug(f"Successfully uploaded data for participant {participant_id}")
-            # Update participant's sync date in MDH
-            logger.debug(f"Updating participant uh_sync_timestamp for {participant_id} to {last_uh_timestamp}...")
-            self._update_participant_sync_date(participant_id, last_uh_timestamp)
-            logger.debug(f"Finished updating participant uh_sync_timestamp for {participant_id} to {last_uh_timestamp}")
+            # Update the last_uh_timestamp with the one from temperature. So all metrics remained synchronized.
+            last_uh_timestamp = mmap.get('temp').get('last_timestamp')
+
+            if self.dry_run:
+                logger.info(f"Dry run: would upload {record_count} records for participant {participant_id}")
+                return {
+                    'participant_id': participant_id,
+                    'success': True,
+                    'record_count': record_count,
+                    'dry_run': True
+                }
+
+            if record_count > 0:
+                logger.debug(f"Successfully uploaded data for participant {participant_id}")
+                # Update participant's sync date in MDH
+                logger.debug(f"Updating participant uh_sync_date and uh_sync_epoch for {participant_id} to {uh_sync_date}, {last_uh_timestamp}")
+                self._update_participant_sync_date(participant_id, last_uh_timestamp, uh_sync_date)
+                logger.debug(f"Finished updating participant uh_sync_* for {participant_id}")
+
+            # Goto the next day if needed.
+            uh_sync_date += datetime.timedelta(days=1)
 
         return {
             'participant_id': participant_id,
@@ -377,7 +478,7 @@ class UltrahumanDataUploader:
             'record_count': record_count,
         }
 
-    def _update_participant_sync_date(self, participant_id: str, last_sync_timestamp: int) -> None:
+    def _update_participant_sync_date(self, participant_id: str, last_sync_epoch: int, last_sync_date: datetime.date) -> None:
         """Update participant's uh_sync_timestamp field in MDH.
         
         Args:
@@ -386,28 +487,27 @@ class UltrahumanDataUploader:
         Raises:
             Exception: If update fails
         """
-        # Generate current ISO8601 timestamp
-        if last_sync_timestamp == 0 or last_sync_timestamp is None:
-            logger.debug(f'No uh_sync_timestamp found for participant_id: {participant_id}: last_sync_timestamp: {last_sync_timestamp}')
-            return
-        last_uh_date = datetime.datetime.fromtimestamp(last_sync_timestamp, datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
         # Update participant's custom field
         update_data = [
             {
                 'participantIdentifier': participant_id,
                 'customFields': {
-                    'uh_sync_timestamp': last_uh_date
+                    'uh_sync_date': last_sync_date.isoformat(),
+                    'uh_sync_epoch': str(last_sync_epoch)
                 }
             }
-        ] 
+        ]
+
+        logger.info(update_data)
+
         # Use MDH API to update participant
-        logger.debug(f"[In _update_participant_sync_date] Updating participant uh_sync_timestamp for {participant_id} to {last_sync_timestamp}...")
+        logger.debug(f"[In _update_participant_sync_date] Updating participant for {participant_id} to {update_data}")
         try:
             self.mdh.update_participants(update_data)
         except Exception as e:
-            logger.error(f"[In _update_participant_sync_date] Failed to update uh_sync_timestamp for participant {participant_id}: {str(e)}")
+            logger.error(f"[In _update_participant_sync_date] Failed to update for participant {participant_id}: {str(e)}")
             return
-        logger.debug(f"[In _update_participant_sync_date] Updated uh_sync_timestamp for participant {participant_id} to {last_sync_timestamp}")
+        logger.debug(f"[In _update_participant_sync_date] Updated for participant {participant_id} to {update_data}")
 
     def process_sns_messages(self, sns_records: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
@@ -636,7 +736,7 @@ def test_locally(participant_id: str = "BB-3234-3734", email: str = "agill2560@g
     """
     # Set default target date if not provided
     if not target_date:
-        target_date = datetime.datetime.strftime((datetime.datetime.now() - datetime.timedelta(days=1)), '%Y-%m-%d')
+        target_date = datetime.datetime.strftime((datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=1)), '%Y-%m-%d')
     
     # Mock SNS event for local testing
     event = {
@@ -648,7 +748,14 @@ def test_locally(participant_id: str = "BB-3234-3734", email: str = "agill2560@g
                         "participant_id": participant_id,
                         "email": email,
                         "target_date": target_date,
-                        "timezone": DEFAULT_TIMEZONE
+                        "dry_run": False,
+                        "timezone": DEFAULT_TIMEZONE,
+                        "custom_fields": {
+                            #"uh_sync_timestamp": "2025-09-09T07:00:00Z",
+                            "uh_start_date": "2025-09-01",
+                            "uh_sync_date": "2025-09-18",
+                            "uh_sync_epoch": "1758241904"
+                        },
                     })
                 }
             }

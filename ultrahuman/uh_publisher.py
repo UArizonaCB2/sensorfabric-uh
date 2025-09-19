@@ -87,7 +87,7 @@ class UltrahumanSNSPublisher:
         if not target_date:
             # Default to yesterday to ensure data is available
             self.target_date = datetime.datetime.strftime(
-                (datetime.datetime.now() - datetime.timedelta(days=1)), 
+                datetime.datetime.now(datetime.UTC),
                 '%Y-%m-%d'
             )
         else:
@@ -104,11 +104,9 @@ class UltrahumanSNSPublisher:
             for participant in participants_data.get('participants', []):
                 # Filter for active participants
                 custom_fields = participant.get('customFields', {})
-                last_sync_date = custom_fields.get('uh_sync_date', None)
-                # check last sync date to make sure we don't oversync
-                if last_sync_date is None:
-                    continue
-                if participant.get('enrolled'):
+                # Also check to see if study has enabled UH syncing via `uh_enabled`
+                uh_enabled = custom_fields.get('uh_enabled', 'no')
+                if participant.get('enrolled') and uh_enabled == 'yes':
                     active_participants.append(participant)
 
             logger.debug(f"Found {len(active_participants)} active participants")
@@ -156,17 +154,17 @@ class UltrahumanSNSPublisher:
         # Extract timezone from custom fields
         custom_fields = participant.get('customFields', {})
         timezone = custom_fields.get('timeZone', 'America/Phoenix')
-        
+
         # Create SNS message payload
         message_data = {
             'participant_id': participant_id,
             'email': email,
             'target_date': self.target_date,
-            'timezone': timezone,
+            'timezone': timezone,   # While we do provide the MDH timezone, uh_uploader prioritizes the timezone coming from the device.
             'dry_run': self.dry_run,
             'custom_fields': custom_fields
         }
-        
+
         try:
             # Publish message to SNS topic
             response = self.sns_client.publish(
@@ -278,7 +276,7 @@ class UltrahumanSNSPublisher:
             # Get active participants
             else:
                 participants = self._get_active_participants()
-            
+
             logger.info(f"Found participants: {participants}")
 
             if not participants:
@@ -291,7 +289,7 @@ class UltrahumanSNSPublisher:
                     'failed_publishes': 0,
                     'results': []
                 }
-            
+
             # Publish SNS messages for each participant
             results = []
             successful_publishes = 0
