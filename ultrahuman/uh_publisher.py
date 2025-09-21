@@ -277,7 +277,7 @@ class UltrahumanSNSPublisher:
             else:
                 participants = self._get_active_participants()
 
-            logger.info(f"Found participants: {participants}")
+            #logger.info(f"Found participants: {participants}")
 
             if not participants:
                 return {
