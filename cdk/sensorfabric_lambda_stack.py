@@ -324,7 +324,28 @@ class SensorFabricLambdaStack(Stack):
                         allowed_headers=["*"]
                     )
                 )
-                
+
+                # Add resource-based policy for function URL with new authorization model
+                # AWS now requires both InvokeFunctionUrl AND InvokeFunction permissions
+                # with explicit FunctionUrlAuthType condition to allow public access
+                # Using CfnPermission to support conditions parameter
+                lambda_.CfnPermission(
+                    self,
+                    f"{self.config.project_name}_{function_name}_FunctionUrlPermission",
+                    action="lambda:InvokeFunctionUrl",
+                    function_name=lambda_function.function_name,
+                    principal="*",
+                    function_url_auth_type="NONE"
+                )
+
+                lambda_.CfnPermission(
+                    self,
+                    f"{self.config.project_name}_{function_name}_FunctionInvokePermission",
+                    action="lambda:InvokeFunction",
+                    function_name=lambda_function.function_name,
+                    principal="*"
+                )
+
                 # Output the Function URL
                 cdk.CfnOutput(
                     self, f"{self.config.project_name}_{function_name}_FunctionURL",
