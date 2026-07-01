@@ -1,0 +1,134 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AppResourcesConfinedToSandboxNamespace",
+      "Effect": "Allow",
+      "Action": [
+        "s3:*",
+        "lambda:*",
+        "sns:*",
+        "sqs:*",
+        "states:*",
+        "events:*",
+        "logs:*",
+        "secretsmanager:*",
+        "cloudformation:*",
+        "athena:*"
+      ],
+      "Resource": [
+        "arn:aws:s3:::uhsandbox-*",
+        "arn:aws:s3:::uhsandbox-*/*",
+        "arn:aws:lambda:us-east-1:509812589231:function:uhsandbox-*",
+        "arn:aws:sns:us-east-1:509812589231:uhsandbox-*",
+        "arn:aws:sqs:us-east-1:509812589231:uhsandbox-*",
+        "arn:aws:states:us-east-1:509812589231:stateMachine:uhsandbox-*",
+        "arn:aws:states:us-east-1:509812589231:execution:uhsandbox-*:*",
+        "arn:aws:states:us-east-1:509812589231:activity:uhsandbox-*",
+        "arn:aws:events:us-east-1:509812589231:rule/uhsandbox-*",
+        "arn:aws:logs:us-east-1:509812589231:log-group:/aws/lambda/uhsandbox-*",
+        "arn:aws:logs:us-east-1:509812589231:log-group:/aws/lambda/uhsandbox-*:*",
+        "arn:aws:logs:us-east-1:509812589231:log-group:/aws/stepfunctions/uhsandbox-*",
+        "arn:aws:logs:us-east-1:509812589231:log-group:/aws/stepfunctions/uhsandbox-*:*",
+        "arn:aws:secretsmanager:us-east-1:509812589231:secret:uhsandbox/*",
+        "arn:aws:secretsmanager:us-east-1:509812589231:secret:uhsandbox-*",
+        "arn:aws:cloudformation:us-east-1:509812589231:stack/uhsandbox-*/*",
+        "arn:aws:athena:us-east-1:509812589231:workgroup/uhsandbox-*",
+        "arn:aws:athena:us-east-1:509812589231:datacatalog/uhsandbox-*"
+      ]
+    },
+    {
+      "Sid": "GlueConfinedToSandboxDatabases",
+      "Effect": "Allow",
+      "Action": "glue:*",
+      "Resource": [
+        "arn:aws:glue:us-east-1:509812589231:catalog",
+        "arn:aws:glue:us-east-1:509812589231:database/uhsandbox-*",
+        "arn:aws:glue:us-east-1:509812589231:table/uhsandbox-*/*",
+        "arn:aws:glue:us-east-1:509812589231:userDefinedFunction/uhsandbox-*/*"
+      ]
+    },
+    {
+      "Sid": "EcrForSandboxImagesAndCdkAssets",
+      "Effect": "Allow",
+      "Action": "ecr:*",
+      "Resource": [
+        "arn:aws:ecr:us-east-1:509812589231:repository/uhsandbox-*",
+        "arn:aws:ecr:us-east-1:509812589231:repository/cdk-hnb659fds-container-assets-*"
+      ]
+    },
+    {
+      "Sid": "CdkBootstrapPlumbing",
+      "Effect": "Allow",
+      "Action": [
+        "sts:AssumeRole"
+      ],
+      "Resource": "arn:aws:iam::509812589231:role/cdk-hnb659fds-*"
+    },
+    {
+      "Sid": "CdkAssetBucketAndBootstrapParam",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject",
+        "s3:GetBucketLocation",
+        "s3:ListBucket",
+        "ssm:GetParameter",
+        "ssm:GetParameters"
+      ],
+      "Resource": [
+        "arn:aws:s3:::cdk-hnb659fds-assets-509812589231-us-east-1",
+        "arn:aws:s3:::cdk-hnb659fds-assets-509812589231-us-east-1/*",
+        "arn:aws:ssm:us-east-1:509812589231:parameter/cdk-bootstrap/*"
+      ]
+    },
+    {
+      "Sid": "IamForCdkCreatedSandboxRolesOnly",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreateRole",
+        "iam:DeleteRole",
+        "iam:GetRole",
+        "iam:GetRolePolicy",
+        "iam:ListRolePolicies",
+        "iam:ListAttachedRolePolicies",
+        "iam:PassRole",
+        "iam:AttachRolePolicy",
+        "iam:DetachRolePolicy",
+        "iam:PutRolePolicy",
+        "iam:DeleteRolePolicy",
+        "iam:TagRole",
+        "iam:UntagRole"
+      ],
+      "Resource": "arn:aws:iam::509812589231:role/uhsandbox-*"
+    },
+    {
+      "Sid": "GlobalReadOnlyMetadataForToolingAndConsole",
+      "Effect": "Allow",
+      "Action": [
+        "cloudformation:ListStacks",
+        "cloudformation:ValidateTemplate",
+        "cloudformation:GetTemplateSummary",
+        "s3:ListAllMyBuckets",
+        "lambda:ListFunctions",
+        "lambda:GetAccountSettings",
+        "sns:ListTopics",
+        "sqs:ListQueues",
+        "states:ListStateMachines",
+        "states:ListActivities",
+        "events:ListRules",
+        "logs:DescribeLogGroups",
+        "athena:ListWorkGroups",
+        "athena:ListDataCatalogs",
+        "ecr:GetAuthorizationToken",
+        "ecr:DescribeRepositories",
+        "cloudwatch:ListMetrics",
+        "cloudwatch:GetMetricData",
+        "cloudwatch:GetMetricStatistics",
+        "iam:ListRoles",
+        "sts:GetCallerIdentity"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
