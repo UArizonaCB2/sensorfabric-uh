@@ -559,7 +559,7 @@ def test_locally(participant_id: Optional[str] = None):
     """
     # Mock event for local testing
     event = {
-        'update_mdh': True
+        'update_mdh': False 
     }
     
     if participant_id:

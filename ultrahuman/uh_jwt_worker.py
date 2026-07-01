@@ -188,7 +188,9 @@ class UltrahumanJWTWorker:
         self,
         participant_id: str,
         start_date: str,
-        end_date: str
+        end_date: str,
+        dry_run: bool = False,
+        mock_data: dict = None,
     ) -> str:
         """
         Generate HTML template for a participant and upload to S3.
@@ -197,7 +199,8 @@ class UltrahumanJWTWorker:
             participant_id: MDH participant ID
             start_date: Start date for report period (YYYY-MM-DD)
             end_date: End date for report period (YYYY-MM-DD)
-            
+            dry_run: Set to True if you just want to return the actual HTML generated for the template.
+            mock_data: Pass a dictionary to this for testing out the templating engine with custom values.
         Returns:
             S3 path to the uploaded HTML template
         """
@@ -223,19 +226,7 @@ class UltrahumanJWTWorker:
         }
 
         try:
-            helper = Helper(config=config)
-            ringwear = helper.ringWearTime()
-            weight = helper.weightSummary()
-            movement = helper.movementSummary()
-            symptoms = helper.topSymptomsRecorded()
-            sleep = helper.sleepSummary()
-            temp = helper.temperatureSummary()
-            hr = helper.heartRateSummary()
-            bp = helper.bloodPressure()
-            weeks_enrolled = helper.weeksEnrolled()
-            ga_weeks = helper.weeksPregnant()
-            ema_count = helper.emaCompleted()
-
+            # Load the template HTML file.
             env = Environment(loader=FileSystemLoader('ultrahuman/templates'))
             template = env.get_template('reportv2.html')
 
@@ -243,31 +234,54 @@ class UltrahumanJWTWorker:
             start_str = start_date_obj.strftime("%B %d")
             end_str = end_date_obj.strftime("%B %d, %Y")
 
-            data = dict(
-                ringwear=ringwear,
-                weeks_enrolled=weeks_enrolled,
-                current_pregnancy_week=ga_weeks,
-                surveys_completed=ema_count,
-                symptoms=symptoms,
-                weight=weight,
-                movement=movement,
-                sleep=sleep,
-                temp=temp,
-                hr=hr,
-                bp=bp,
-                # enabled flags (not currently used. Passing None to metrics disables them)
-                blood_pressure_enabled=True,
-                heart_rate_enabled=True,
-                temperature_enabled=True,
-                sleep_enabled=True,
-                weight_enabled=True,
-                movement_enabled=True,
-                start_str=start_str,
-                end_str=end_str
-            )
+            # If we have not passed any mock_data then go ahead and generate everything.
+            if mock_data is None:
+                helper = Helper(config=config)
+                ringwear = helper.ringWearTime()
+                weight = helper.weightSummary()
+                movement = helper.movementSummary()
+                symptoms = helper.topSymptomsRecorded()
+                sleep = helper.sleepSummary()
+                temp = helper.temperatureSummary()
+                hr = helper.heartRateSummary()
+                bp = helper.bloodPressure()
+                weeks_enrolled = helper.weeksEnrolled()
+                ga_weeks = helper.weeksPregnant()
+                ema_count = helper.emaCompleted()
+
+                data = dict(
+                    ringwear=ringwear,
+                    weeks_enrolled=weeks_enrolled,
+                    current_pregnancy_week=ga_weeks,
+                    surveys_completed=ema_count,
+                    symptoms=symptoms,
+                    weight=weight,
+                    movement=movement,
+                    sleep=sleep,
+                    temp=temp,
+                    hr=hr,
+                    bp=bp,
+                    # enabled flags (not currently used. Passing None to metrics disables them)
+                    blood_pressure_enabled=True,
+                    heart_rate_enabled=True,
+                    temperature_enabled=True,
+                    sleep_enabled=True,
+                    weight_enabled=True,
+                    movement_enabled=True,
+                    start_str=start_str,
+                    end_str=end_str
+                )
+
+            # Use the mock_data instead if it was passed.
+            else:
+                data = mock_data
 
             html = template.render(data)
             
+            # Return the raw HTML if we had set dry_run = True.
+            if dry_run:
+                return html
+        
             # Upload HTML to S3 and return the S3 path
             s3_path = self._upload_template_to_s3(html, participant_id, start_date, end_date)
             return s3_path

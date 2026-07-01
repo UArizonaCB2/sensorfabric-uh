@@ -4,12 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-SensorFabric UltraHuman (UH) is an AWS Lambda-based data pipeline that collects health/fitness metrics from UltraHuman devices. The system consists of four main Lambda functions:
+SensorFabric UltraHuman (UH) is an AWS Lambda-based data pipeline that collects health/fitness metrics from UltraHuman devices. The system consists of five main Lambda functions:
 
 - **biobayb_uh_publisher**: Fetches active participants from MDH and publishes SNS messages to trigger data collection (scheduled daily)
 - **biobayb_uh_uploader**: Processes SNS messages, fetches UltraHuman data via API, and uploads parquet files to S3
 - **biobayb_uh_template_generator**: Generates weekly health reports from collected data with JWT authentication
-- **biobayb_uh_jwt_generator**: Generates JWT tokens for secure report access and updates MDH participant custom fields
+- **biobayb_uh_jwt_coordinator**: Coordinates JWT generation using Step Functions (fetches participants and starts fan-out execution)
+- **biobayb_uh_jwt_worker**: Worker function that generates individual JWT tokens and HTML reports for each participant
 
 ## Build and Deployment Commands
 
@@ -64,22 +65,34 @@ cdk destroy
 ## Architecture Overview
 
 ### Data Flow
+
+**Daily Data Collection:**
 1. **Scheduled Trigger**: EventBridge rule triggers `biobayb_uh_publisher` daily at 7:00 AM UTC
-2. **Participant Discovery**: Publisher queries MDH database for active participants
+2. **Participant Discovery**: Publisher queries MDH database for active participants (enrolled with `uh_enabled=yes`)
 3. **SNS Publishing**: Publisher sends SNS message for each participant to `mdh_uh_sync` topic
 4. **Data Collection**: SNS message triggers `biobayb_uh_uploader` Lambda
 5. **API Integration**: Uploader fetches data from UltraHuman API using participant email
-6. **Data Storage**: Raw data flattened and stored as parquet files in S3 bucket
-7. **MDH Updates**: Participant sync timestamps updated in MDH database
-8. **Weekly JWT Generation**: EventBridge rule triggers `biobayb_uh_jwt_generator` weekly on Sundays at midnight UTC-7
+6. **Data Storage**: Raw JSON stored in S3, then parsed and flattened to parquet files partitioned by participant ID
+7. **MDH Updates**: Participant `uh_sync_date` and `uh_sync_epoch` updated in MDH after successful upload
+
+**Weekly JWT & Report Generation:**
+1. **Scheduled Trigger**: EventBridge triggers `biobayb_uh_jwt_coordinator` weekly on Sundays at midnight UTC-7
+2. **Participant List**: Coordinator fetches all active participants from MDH
+3. **Step Functions Fan-Out**: Coordinator starts Step Functions execution with participant list
+4. **Parallel Processing**: Step Functions invokes `biobayb_uh_jwt_worker` for each participant in parallel
+5. **Report Generation**: Worker generates HTML report using Jinja2 templates and Helper class queries
+6. **S3 Upload**: Worker uploads HTML to S3 and generates JWT token with S3 path
+7. **MDH Update**: Worker updates participant's `report_jwt` custom field in MDH
 
 ### Key Components
-- **ECR Repository**: `uh-biobayb` - shared Docker image for all Lambda functions
+- **ECR Repository**: `uh-biobayb` - shared Docker image for all Lambda functions (different CMD handlers per function)
 - **SNS Topic**: Inter-function communication via `mdh_uh_sync` topic
-- **S3 Bucket**: Data storage in `uoa-biobayb-uh-{env}` buckets
+- **S3 Bucket**: Data storage in `uoa-biobayb-uh-{env}` buckets (raw JSON and parquet files)
 - **Secrets Manager**: UltraHuman API credentials and JWT secrets stored in `prod/biobayb/uh/keys`
 - **SQS DLQ**: Dead letter queue for failed message processing
 - **CloudWatch**: Centralized logging with infinite retention
+- **Step Functions**: Orchestrates parallel JWT/report generation for all participants
+- **Glue Database**: Athena database for querying parquet data (named same as SF_DATABASE_NAME env var)
 
 ### Environment Configuration
 The system supports multiple deployment environments:
@@ -103,15 +116,31 @@ All functions use shared Docker image from ECR with different CMD handlers:
 - Runtime: Container-based Python
 
 ### Data Pipeline Structure
-S3 data organized by participant and date:
+S3 data organized with separate raw JSON and parquet storage:
 ```
 s3://bucket/
-├── participant_id=xxx/
-│   ├── date=2024-01-01/
-│   │   └── data.parquet
-│   └── date=2024-01-02/
-│       └── data.parquet
+├── raw/
+│   ├── json/               # Raw UltraHuman API responses
+│   │   └── pid={participant_id}/
+│   │       └── date={YYYY-MM-DD}/
+│   │           └── data.json
+│   └── dataset/            # Flattened parquet files by metric type
+│       ├── temp/           # Temperature data
+│       │   └── pid={participant_id}/
+│       │       └── *.parquet
+│       ├── hr/             # Heart rate data
+│       ├── sleep_stages/   # Sleep stages
+│       └── [other metrics]/
+└── templates/              # Generated HTML reports
+    └── template_{participant_id}_{start}_{end}_{timestamp}.html
 ```
+
+### Data Processing Notes
+- **Whitelisted Metrics**: Only specific UH metrics are processed (temp, hr, hrv, sleep_stages, steps, etc.). See `WHITELISTED_TABLES` in `uh_uploader.py:22-37`
+- **Temperature as Anchor**: Temperature metric is used as the "north star" for determining if a day has valid data
+- **Timestamp Filtering**: Data is filtered by `uh_sync_epoch` to avoid re-processing old data
+- **Sleep Metrics**: Sleep data contains nested sub-metrics that are extracted and processed separately
+- **Timezone Handling**: Uses device timezone from UltraHuman API (priority over MDH timezone)
 
 ## Development Notes
 
@@ -123,34 +152,37 @@ s3://bucket/
 
 ### Environment Variables
 Key environment variables used by Lambda functions:
-- `UH_ENVIRONMENT`: "development" or "production"
-- `UH_SNS_TOPIC_ARN`: SNS topic ARN for publishing messages
-- `SF_DATA_BUCKET`: S3 bucket for data storage
-- `AWS_SECRET_NAME`: Secrets Manager secret name
-- `UH_DLQ_URL`: Dead letter queue URL
+- `UH_ENVIRONMENT`: "development" or "production" (determines which UH API to use)
+- `UH_SNS_TOPIC_ARN`: SNS topic ARN for publishing messages (publisher only)
+- `SF_DATA_BUCKET`: S3 bucket for data storage (uploader, jwt_worker)
+- `SF_DATABASE_NAME`: Glue/Athena database name (uploader, template_generator, jwt_worker)
+- `AWS_SECRET_NAME`: Secrets Manager secret name (all functions)
+- `UH_DLQ_URL`: Dead letter queue URL (publisher only)
+- `JWT_EXPIRATION_DAYS`: JWT token expiration in days (jwt_worker, default: 7)
+- `TEMPLATE_GENERATOR_URL`: Lambda function URL for template generator (jwt_worker)
+- `TEMPLATE_MODE`: "PRODUCTION" or "PRESENT" (template_generator)
+- `LOG_LEVEL`: Logging level (default: INFO)
 
 ### Manual Triggers
-EventBridge patterns for manual execution:
 
-Uploader:
-```json
-{
-  "source": ["sensorfabric.manual"],
-  "detail-type": ["UltraHuman Data Upload Request"]
-}
+**Publisher (trigger data collection for participant):**
+```bash
+aws lambda invoke --function-name {publisher_function_name} \
+  --payload '{"participant_id": "BB-1234-5678", "target_date": "2024-01-15"}' \
+  /tmp/response.json
 ```
 
-JWT Generator:
-```json
-{
-  "source": ["sensorfabric.manual"],
-  "detail-type": ["UltraHuman JWT Generation Request"],
-  "detail": {
-    "start_date": "2024-01-01",
-    "end_date": "2024-01-31",
-    "participant_id": "optional_specific_participant"
-  }
-}
+**JWT Coordinator (trigger report generation):**
+```bash
+aws lambda invoke --function-name {jwt_coordinator_function_name} \
+  --payload '{"start_date": "2024-01-01", "end_date": "2024-01-31", "participant_id": "optional"}' \
+  /tmp/response.json
+```
+
+**Direct SNS Message (alternative to publisher):**
+```bash
+aws sns publish --topic-arn {sns_topic_arn} \
+  --message '{"participant_id": "BB-1234-5678", "email": "user@example.com", "target_date": "2024-01-15", "timezone": "America/Phoenix"}'
 ```
 
 ### Monitoring
@@ -158,14 +190,81 @@ JWT Generator:
 - Health checks via `deploy.sh --health-check`
 - Failed executions sent to SQS DLQ with 2 retry attempts
 
+### Local Testing
+Each Lambda function has a `test_locally()` function for development:
+```bash
+# Set up environment variables first
+export AWS_SECRET_NAME="prod/biobayb/uh/keys"
+export AWS_REGION="us-east-1"
+export SF_DATA_BUCKET="uoa-biobayb-uh-dev"
+export SF_DATABASE_NAME="uh-biobayb-dev"
+export UH_ENVIRONMENT="development"
+
+# Test publisher
+python -c "from ultrahuman.uh_publisher import test_locally; test_locally()"
+
+# Test uploader
+python -c "from ultrahuman.uh_uploader import test_locally; test_locally(participant_id='BB-1234', email='user@example.com')"
+
+# Test JWT generator
+python -c "from ultrahuman.uh_jwt_generator import test_locally; test_locally(participant_id='BB-1234')"
+```
+
 ### Debugging
 ```bash
 # View function logs
 aws logs tail /aws/lambda/{function_name} --follow
 
-# Test function locally
-aws lambda invoke --function-name {function_name} /tmp/response.json
+# Test function remotely
+aws lambda invoke --function-name {function_name} \
+  --payload '{}' \
+  /tmp/response.json && cat /tmp/response.json | jq
 
 # Check CloudFormation events
-aws cloudformation describe-stack-events --stack-name {stack_name}
+aws cloudformation describe-stack-events --stack-name {stack_name} | jq
+
+# Query Athena for uploaded data
+aws athena start-query-execution \
+  --query-string "SELECT * FROM {database_name}.temp WHERE pid='BB-1234' LIMIT 10" \
+  --result-configuration OutputLocation=s3://{bucket}/athena-results/
 ```
+
+### Shared Docker Image Architecture
+All Lambda functions use a single Docker image from ECR (`uh-biobayb:shared`) with different CMD handlers:
+- **Image location**: `docker/Dockerfile.shared`
+- **Base image**: `public.ecr.aws/lambda/python:3.9` (or similar)
+- **Handler pattern**: Each function specifies its handler via CDK configuration (e.g., `ultrahuman.uh_publisher.lambda_handler`)
+- **Build process**: `deploy.sh` builds once and pushes to ECR, then all Lambda functions reference the same image URI
+- **Benefits**: Single build reduces deployment time, ensures consistency across functions
+
+## Important Implementation Details
+
+### Participant Configuration (MDH Custom Fields)
+Each participant must have these custom fields configured in MDH:
+- **uh_enabled**: "yes" or "no" (determines if participant is included in data collection)
+- **uh_email**: Email registered with UltraHuman device (falls back to demographics email or account email)
+- **uh_start_date**: Initial date to begin data collection (YYYY-MM-DD format)
+- **uh_sync_date**: Last successfully synced date (updated automatically by uploader)
+- **uh_sync_epoch**: Last successfully synced timestamp in seconds (updated automatically by uploader)
+- **report_jwt**: JWT token for report access (updated automatically by jwt_worker)
+- **timeZone**: Participant timezone (e.g., "America/Phoenix", used as fallback if device timezone unavailable)
+
+### Error Handling and Retries
+The system uses custom error handling in `ultrahuman/error_handling.py`:
+- **RetryableError**: Transient errors (network issues, rate limits) that trigger SNS/Lambda retry
+- **NonRetryableError**: Permanent errors (invalid data, missing participants) sent to DLQ without retry
+- **Dead Letter Queue**: Failed messages accumulate in SQS DLQ for manual review
+- **Logging**: All errors logged with full context to CloudWatch for debugging
+
+### Data Collection Behavior
+- **Lookback Window**: Uploader processes up to 45 days of historical data per invocation (MAX_SYNC_DAYS)
+- **Incremental Sync**: Uses `uh_sync_epoch` to filter already-processed data points within a day
+- **Date Iteration**: Uploader loops day-by-day from `uh_sync_date` to `target_date`
+- **Temperature Validation**: Day is skipped if temperature metric is missing or empty (used as data quality indicator)
+- **Timestamp Anchoring**: All metrics synchronized to temperature metric's last timestamp
+
+### Security Considerations
+- **S3 Bucket Check**: `deploy.sh` includes public S3 bucket detection (prevents accidental data exposure)
+- **JWT Secrets**: REPORT_SECRET stored in AWS Secrets Manager, never in code
+- **Server-Side Encryption**: All S3 uploads use AES256 encryption
+- **Function URLs**: Template generator can expose function URL for JWT-authenticated report access

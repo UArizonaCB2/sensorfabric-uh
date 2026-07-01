@@ -362,6 +362,10 @@
             color: #9ca3af;
         }
 
+        .centerify {
+            text-align: center;
+        }
+
         /* Responsive Adjustments */
         @media (max-width: 768px) {
             body {
@@ -431,7 +435,6 @@
             {% endif %}
 
             <!-- Heart Rate Card -->
-            {% if hr is not none %}
             <div class="report-card">
                 <div class="card-header">
                     <div class="icon icon-heart">
@@ -440,13 +443,15 @@
                     <h2>Resting Heart Rate</h2>
                 </div>
                 <div class="card-body">
+                    {% if hr is none %}
+                    <p class="secondary-text centerify">No Data</p>
+                    {% else %}
                     <p class="primary-metric">{{hr.avg_rhr}}<span class="unit">bpm</span></p>
+                    {% endif %}
                 </div>
             </div>
-            {% endif %}
 
             <!-- Movement Card -->
-            {% if movement is not none %}
             <div class="report-card">
                 <div class="card-header">
                     <div class="icon icon-movement">
@@ -455,13 +460,16 @@
                     <h2>Avg. Steps</h2>
                 </div>
                 <div class="card-body">
-                    <p class="primary-metric">{{movement.average_steps_int}}</p>
-                    {% if movement.trend is not none %}
-                    <p class="trend negative">{{movement.trend}} steps than last week</p>
+                    {%if movement is none %}
+                    <p class="secondary-text centerify">No Data</p>
+                    {% else %}
+                        <p class="primary-metric">{{movement.average_steps_int}}</p>
+                        {% if movement.trend is not none %}
+                        <p class="trend negative">{{movement.trend}} steps than last week</p>
+                        {% endif %}
                     {% endif %}
                 </div>
             </div>
-            {% endif %}
 
             <!-- Blood Pressure Card -->
             {% if bp is not none %}
