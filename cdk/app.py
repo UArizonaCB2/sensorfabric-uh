@@ -40,6 +40,30 @@ prodConfig = StackConfig(
     jwt_expiration_days="14"
 )
 
+# Sandbox stack for trusted developers (IAM user in the "uhsandbox" allow-list).
+# Every resource name is prefixed "uhsandbox-" so it falls inside the
+# uhsandbox-developer-policy allow-list (see iam/uhsandbox-developer-policy.json).
+# It does NOT touch any prod resource. Deploy it with either:
+#     cd cdk && cdk deploy -c config=sandbox
+#     CDK_CONFIG=sandbox ./deploy.sh --cdk
+# Prereqs (create once, outside CDK): the S3 bucket "uhsandbox-uh-data" and the
+# Secrets Manager secret "uhsandbox/keys" must exist before deploying.
+sandboxConfig = StackConfig(
+    stack_name="uhsandbox-uh",
+    environment="dev",
+    ecr_registry="509812589231.dkr.ecr.us-east-1.amazonaws.com",
+    ecr_repository="uhsandbox-uh",
+    project_name="uhsandbox-uh",
+    database_name="uhsandbox-uh",
+    sns_topic_name="mdh_uh_sync",
+    aws_secret_name="uhsandbox/keys",
+    sf_data_bucket="uhsandbox-uh-data",
+    uh_environment="development",
+    template_mode="PRESENT",
+    jwt_expiration_days="14",
+    athena_workgroup="uhsandbox-primary"
+)
+
 # TODO: add other stacks.
 # recommend using the same ECR registry since we're not changing out the lambda code per stack
 # prod_stack = StackConfig(
@@ -64,12 +88,23 @@ prodConfig = StackConfig(
 #     description=f"SensorFabric Staging - {config.stack_name} deployed via Docker containers"
 # )
 
+# Select which stack to deploy via context:  cdk deploy -c config=sandbox
+# Defaults to "prod" so existing deployment behavior is unchanged.
+selected = app.node.try_get_context("config") or "prod"
+configs = {
+    "prod": prodConfig,
+    "sandbox": sandboxConfig,
+}
+if selected not in configs:
+    raise ValueError(f"Unknown config '{selected}'. Choose one of: {', '.join(configs)}")
+activeConfig = configs[selected]
+
 SensorFabricLambdaStack(
     app,
-    prodConfig.stack_name,
-    config=prodConfig,
+    activeConfig.stack_name,
+    config=activeConfig,
     env=cdk.Environment(account=account, region=region),
-    description=f"SensorFabric Production - {prodConfig.stack_name} deployed via Docker containers"
+    description=f"SensorFabric {activeConfig.environment} - {activeConfig.stack_name} deployed via Docker containers"
 )
 
 app.synth()

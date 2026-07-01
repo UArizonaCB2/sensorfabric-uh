@@ -13,6 +13,7 @@ from aws_cdk import (
     aws_events_targets as targets,
     aws_stepfunctions as stepfunctions,
     aws_stepfunctions_tasks as stepfunctions_tasks,
+    aws_athena as athena,
     Tags,
     Duration,
     Stack,
@@ -36,6 +37,7 @@ class StackConfig:
     uh_environment: str
     template_mode: str        # PRODUCTION or PRESENT
     jwt_expiration_days: str
+    athena_workgroup: str = ""  # if set, CDK creates a dedicated Athena workgroup by this name
 
 
 class SensorFabricLambdaStack(Stack):
@@ -160,9 +162,13 @@ class SensorFabricLambdaStack(Stack):
             repository_name=self.config.ecr_repository
         )
 
+        # Create a dedicated Athena workgroup (sandbox stacks only)
+        if self.config.athena_workgroup:
+            self.create_athena_workgroup()
+
         # Create IAM roles
         self.create_iam_roles()
-        
+
         # Create SNS topics and subscriptions
         self.create_sns_resources()
         
@@ -182,6 +188,32 @@ class SensorFabricLambdaStack(Stack):
         
         # Create EventBridge rules for scheduling
         self.create_eventbridge_rules()
+
+    def create_athena_workgroup(self) -> None:
+        """Create a dedicated Athena workgroup with an enforced results location.
+
+        Used by sandbox stacks so that Athena queries stay inside the stack's own
+        namespace (workgroup + results bucket both under the resource prefix),
+        rather than falling back to the shared "primary" workgroup. The runtime
+        selects this workgroup via the UH_WORKGROUP value in the stack's secret.
+        """
+        athena.CfnWorkGroup(
+            self, f"{self.config.project_name}_AthenaWorkGroup",
+            name=self.config.athena_workgroup,
+            description=f"Athena workgroup for {self.config.project_name}",
+            recursive_delete_option=True,
+            state="ENABLED",
+            work_group_configuration=athena.CfnWorkGroup.WorkGroupConfigurationProperty(
+                enforce_work_group_configuration=True,
+                publish_cloud_watch_metrics_enabled=False,
+                result_configuration=athena.CfnWorkGroup.ResultConfigurationProperty(
+                    output_location=f"s3://{self.config.sf_data_bucket}/athena-results/",
+                    encryption_configuration=athena.CfnWorkGroup.EncryptionConfigurationProperty(
+                        encryption_option="SSE_S3"
+                    )
+                )
+            )
+        )
 
     def create_iam_roles(self) -> None:
         """Create IAM roles for Lambda functions."""

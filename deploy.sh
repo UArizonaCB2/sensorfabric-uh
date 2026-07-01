@@ -8,8 +8,8 @@
 # Configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # PROJECT_NAME="sensorfabric-uh"  # Currently unused
-ECR_REGISTRY="509812589231.dkr.ecr.us-east-1.amazonaws.com"
-ECR_REPOSITORY="uh-biobayb"
+ECR_REGISTRY="${ECR_REGISTRY:-509812589231.dkr.ecr.us-east-1.amazonaws.com}"
+ECR_REPOSITORY="${ECR_REPOSITORY:-uh-biobayb}"
 AWS_REGION="us-east-1"
 CDK_DIR="$SCRIPT_DIR/cdk"
 DOCKER_DIR="docker"
@@ -515,7 +515,7 @@ deploy_with_cdk() {
             fi
             
             # Deploy CDK stack
-            cdk deploy --all --require-approval never
+            cdk deploy --all --require-approval never ${CDK_CONFIG:+-c config=$CDK_CONFIG}
         })
         log_info "CDK deployment completed"
     else
