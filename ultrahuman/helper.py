@@ -263,20 +263,23 @@ class Helper:
                        'current' as week_type
                 from omronbloodpressure
                 where participantIdentifier = '{self.participant_id}'
-                and cast(datetimelocal as date) between date('{start_date_str}') and date('{end_date_str}')
+                and cast(coalesce(datetimelocal, datetime, inserteddate) as date) between date('{start_date_str}') and date('{end_date_str}')
             ),
             previous_week as (
                 select cast(systolic as double) systolic, cast(diastolic as double) diastolic,
                        'previous' as week_type
                 from omronbloodpressure
                 where participantIdentifier = '{self.participant_id}'
-                and cast(datetimelocal as date) between date('{prev_start_str}') and date('{prev_end_str}')
+                and cast(coalesce(datetimelocal, datetime, inserteddate) as date) between date('{prev_start_str}') and date('{prev_end_str}')
             )
             select * from current_week
             union all
             select * from previous_week
         """
         combined_data: pd.DataFrame = self.athena_mdh.execQuery(combined_query)
+
+        if combined_data is None or combined_data.empty:
+            return None
         combined_data['systolic'] = pd.to_numeric(combined_data['systolic'], errors='coerce', downcast='float')
         combined_data['diastolic'] = pd.to_numeric(combined_data['diastolic'], errors='coerce', downcast='float')
         # Split the results back into current and previous weeks
@@ -449,18 +452,18 @@ class Helper:
 
         query = f"""
                 select 
-                    cast(floor(avg(case when cast("date" as date) between date('{curr_start_str}') and date('{end_date_str}') 
+                    cast(floor(avg(case when cast(startdate as date) between date('{curr_start_str}') and date('{end_date_str}')
                         then case units when 'lb' then cast(value as double) else cast(value as double) * 2.20462 end 
                         end)) as int) curr_avg_weight,
-                    cast(floor(avg(case when cast("date" as date) between date('{prev_start_str}') and date('{prev_end_str}') 
+                    cast(floor(avg(case when cast(startdate as date) between date('{prev_start_str}') and date('{prev_end_str}')
                         then case units when 'lb' then cast(value as double) else cast(value as double) * 2.20462 end 
                         end)) as int) prev_avg_weight
                 from healthkitv2samples
-                where type = 'Weight'
+                where type in ('BodyMass', 'Weight')
                     and participantidentifier = '{self.participant_id}'
                     and (
-                        cast("date" as date) between date('{curr_start_str}') and date('{end_date_str}') or
-                        cast("date" as date) between date('{prev_start_str}') and date('{prev_end_str}')
+                        cast(startdate as date) between date('{curr_start_str}') and date('{end_date_str}') or
+                        cast(startdate as date) between date('{prev_start_str}') and date('{prev_end_str}')
                     )
         """
 
