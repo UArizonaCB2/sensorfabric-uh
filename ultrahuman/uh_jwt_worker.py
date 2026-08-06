@@ -237,13 +237,13 @@ class UltrahumanJWTWorker:
             # If we have not passed any mock_data then go ahead and generate everything.
             if mock_data is None:
                 helper = Helper(config=config)
-                ringwear = helper.ringWearTime()
+                ringwear = None  # UltraHuman disabled; use MDH/Oura later
                 weight = helper.weightSummary()
-                movement = helper.movementSummary()
+                movement = None  # UltraHuman disabled
                 symptoms = helper.topSymptomsRecorded()
-                sleep = helper.sleepSummary()
-                temp = helper.temperatureSummary()
-                hr = helper.heartRateSummary()
+                sleep = None  # MDH/Oura implementation pending
+                temp = None  # UltraHuman disabled
+                hr = None  # MDH/Oura implementation pending
                 bp = helper.bloodPressure()
                 weeks_enrolled = helper.weeksEnrolled()
                 ga_weeks = helper.weeksPregnant()
