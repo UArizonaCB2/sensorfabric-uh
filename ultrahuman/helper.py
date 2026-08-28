@@ -328,37 +328,33 @@ class Helper:
 
     def heartRateSummary(self):
         """
-        Get the summary of HR values in the past week.
-        Important - Do no use counts. Since it gives a single HR value every 5 minutes this is not
-        and accurate representation of the total number of beats.
+        Get resting heart rate from MDH Oura sleep data.
         """
         if os.getenv('TEMPLATE_MODE', 'PRODUCTION') == 'PRESENT':
             return self._debugOutputs()
 
-        # Calculate UTC timestamp range for the current week
-        start_ts, end_ts = self._get_utc_timestamp_range(self.start_date, self.end_date)
-
         query = f"""
             select
-                cast(floor(avg(rhr.object_values_value)) as int) avg_rhr,
-                (select count(*) from hr 
-                 where pid = '{self.participant_id}'
-                 and object_values_timestamp >= {start_ts}
-                 and object_values_timestamp < {end_ts}) hr_counts
-            from night_rhr rhr
-            where rhr.pid = '{self.participant_id}'
-                and rhr.object_values_timestamp >= {start_ts}
-                and rhr.object_values_timestamp < {end_ts}
+                cast(floor(avg(lowestheartrate)) as int) as avg_rhr
+            from ourasleep
+            where participantidentifier = '{self.participant_id}'
+              and day between '{self.start_date}' and '{self.end_date}'
+              and lowestheartrate is not null
         """
 
-        hrsummary = self.athena_uh.execQuery(query)
+        hrsummary = self.athena_mdh.execQuery(query)
 
         if hrsummary.shape[0] <= 0:
             return None
 
+        avg_rhr = hrsummary['avg_rhr'][0]
+
+        if pd.isna(avg_rhr):
+            return None
+
         return {
             'hr_counts': None,
-            'avg_rhr': hrsummary['avg_rhr'][0],
+            'avg_rhr': int(avg_rhr),
         }
 
     def temperatureSummary(self):
@@ -486,69 +482,78 @@ class Helper:
 
     def movementSummary(self):
         """
-        Get movement summary values in the past week.
+        Get average daily steps from MDH Oura activity data.
         """
         if os.getenv('TEMPLATE_MODE', 'PRODUCTION') == 'PRESENT':
             return self._debugOutputs()
 
-        # Calculate UTC timestamp ranges for current and previous weeks  
-        curr_start_ts, curr_end_ts = self._get_utc_timestamp_range(self.start_date, self.end_date)
-        prev_start_date = self.start_date - datetime.timedelta(days=7)
-        prev_end_date = self.end_date - datetime.timedelta(days=7)
-        prev_start_ts, prev_end_ts = self._get_utc_timestamp_range(prev_start_date, prev_end_date)
+        period_days = (self.end_date - self.start_date).days + 1
+        prev_end_date = self.start_date - datetime.timedelta(days=1)
+        prev_start_date = prev_end_date - datetime.timedelta(days=period_days - 1)
 
         query = f"""
-        -- Using conditional aggregation to eliminate cross joins
-        with daily_steps as (
-            select 
-                date(from_unixtime(object_values_timestamp)) step_date,
-                sum(object_values_value) total_steps,
-                case 
-                    when object_values_timestamp >= {curr_start_ts} and object_values_timestamp < {curr_end_ts} then 'current'
-                    when object_values_timestamp >= {prev_start_ts} and object_values_timestamp < {prev_end_ts} then 'previous'
-                    else 'unknown'
-                end period_type
-            from steps
-            where pid = '{self.participant_id}'
-                and (
-                    (object_values_timestamp >= {curr_start_ts} and object_values_timestamp < {curr_end_ts}) or
-                    (object_values_timestamp >= {prev_start_ts} and object_values_timestamp < {prev_end_ts})
-                )
-            group by date(from_unixtime(object_values_timestamp)), 
-                case 
-                    when object_values_timestamp >= {curr_start_ts} and object_values_timestamp < {curr_end_ts} then 'current'
-                    when object_values_timestamp >= {prev_start_ts} and object_values_timestamp < {prev_end_ts} then 'previous'
-                    else 'unknown'
-                end
-        )
-        select 
-            cast(floor(avg(case when period_type = 'current' then total_steps end)) as int) avg_curr,
-            cast(floor(avg(case when period_type = 'previous' then total_steps end)) as int) avg_prev
-        from daily_steps
+            WITH daily_steps AS (
+                SELECT
+                    day,
+                    MAX(steps) AS total_steps,
+                    CASE
+                        WHEN day BETWEEN '{self.start_date}' AND '{self.end_date}'
+                            THEN 'current'
+                        WHEN day BETWEEN '{prev_start_date}' AND '{prev_end_date}'
+                            THEN 'previous'
+                    END AS period_type
+                FROM ouradailyactivity
+                WHERE participantidentifier = '{self.participant_id}'
+                  AND day BETWEEN '{prev_start_date}' AND '{self.end_date}'
+                  AND steps IS NOT NULL
+                GROUP BY day,
+                    CASE
+                        WHEN day BETWEEN '{self.start_date}' AND '{self.end_date}'
+                            THEN 'current'
+                        WHEN day BETWEEN '{prev_start_date}' AND '{prev_end_date}'
+                            THEN 'previous'
+                    END
+            )
+            SELECT
+                CAST(FLOOR(AVG(
+                    CASE WHEN period_type = 'current'
+                         THEN total_steps END
+                )) AS INT) AS avg_curr,
+                CAST(FLOOR(AVG(
+                    CASE WHEN period_type = 'previous'
+                         THEN total_steps END
+                )) AS INT) AS avg_prev
+            FROM daily_steps
         """
 
-        movement = self.athena_uh.execQuery(query)
+        movement = self.athena_mdh.execQuery(query)
+
         if movement.shape[0] <= 0:
             return None
 
         avg_steps = None
         steps_changed = None
+
         try:
             avg_curr = movement['avg_curr'][0]
             avg_prev = movement['avg_prev'][0]
-            if avg_curr is not None:
+
+            if not pd.isna(avg_curr):
                 avg_steps = int(avg_curr)
-            if avg_curr is not None and avg_prev is not None:
+
+            if not pd.isna(avg_curr) and not pd.isna(avg_prev):
                 steps_changed = int(avg_curr) - int(avg_prev)
         except:
             return None
 
+        if avg_steps is None:
+            return None
+
         return {
-                'total_movements_mins': None,
-                'average_steps_int': self._addCommas(avg_steps),
-                # Trend can return a positive or negative value.
-                'trend': self._addCommas(steps_changed) if steps_changed is not None else steps_changed,
-            }
+            'total_movements_mins': None,
+            'average_steps_int': self._addCommas(avg_steps),
+            'trend': self._addCommas(steps_changed) if steps_changed is not None else None,
+        }
 
     def topSymptomsRecorded(self):
         """

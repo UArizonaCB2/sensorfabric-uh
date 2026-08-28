@@ -245,11 +245,11 @@ class UltrahumanJWTGenerator:
             helper = Helper(config=config)
             ringwear = None  # UltraHuman disabled; use MDH/Oura later
             weight = helper.weightSummary()
-            movement = None  # UltraHuman disabled
+            movement = helper.movementSummary()  # MDH/Oura
             symptoms = helper.topSymptomsRecorded()
             sleep = None  # MDH/Oura implementation pending
             temp = None  # UltraHuman disabled
-            hr = None  # MDH/Oura implementation pending
+            hr = helper.heartRateSummary()  # MDH/Oura
             bp = helper.bloodPressure()
             weeks_enrolled = helper.weeksEnrolled()
             ga_weeks = helper.weeksPregnant()
