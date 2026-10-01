@@ -259,14 +259,16 @@ class Helper:
         # Combined query to get both weeks' data in one database call
         combined_query = f"""
             with current_week as (
-                select cast(systolic as double) systolic, cast(diastolic as double) diastolic,
+                select cast(coalesce(datetimelocal, datetime, inserteddate) as date) reading_date,
+                       cast(systolic as double) systolic, cast(diastolic as double) diastolic,
                        'current' as week_type
                 from omronbloodpressure
                 where participantIdentifier = '{self.participant_id}'
                 and cast(coalesce(datetimelocal, datetime, inserteddate) as date) between date('{start_date_str}') and date('{end_date_str}')
             ),
             previous_week as (
-                select cast(systolic as double) systolic, cast(diastolic as double) diastolic,
+                select cast(coalesce(datetimelocal, datetime, inserteddate) as date) reading_date,
+                       cast(systolic as double) systolic, cast(diastolic as double) diastolic,
                        'previous' as week_type
                 from omronbloodpressure
                 where participantIdentifier = '{self.participant_id}'
@@ -283,7 +285,7 @@ class Helper:
         combined_data['systolic'] = pd.to_numeric(combined_data['systolic'], errors='coerce', downcast='float')
         combined_data['diastolic'] = pd.to_numeric(combined_data['diastolic'], errors='coerce', downcast='float')
         # Split the results back into current and previous weeks
-        this_week = combined_data[combined_data['week_type'] == 'current'][['systolic', 'diastolic']]
+        this_week = combined_data[combined_data['week_type'] == 'current'][['reading_date', 'systolic', 'diastolic']]
         previous_week = combined_data[combined_data['week_type'] == 'previous'][['systolic', 'diastolic']]
 
         # If we did not get any BP data for this week, we just return none.
@@ -292,12 +294,20 @@ class Helper:
 
         # Data is already cast to double in SQL, no need for additional pandas conversion
         high_values = 0
+        high_readings = []
         # Check for values which are above the threshold.
         if this_week.shape[0] > 0:
-            for sys, dia in zip(this_week['systolic'], this_week['diastolic']):
+            for when, sys, dia in zip(this_week['reading_date'], this_week['systolic'], this_week['diastolic']):
                 try:
                     if sys > 140 or dia > 90:
+                        # Build the entry first so the count and the list can never disagree.
+                        reading = {
+                            'date': self._formatReadingDate(when),
+                            'systolic': int(sys),
+                            'diastolic': int(dia),
+                        }
                         high_values += 1
+                        high_readings.append(reading)
                 except:
                     # If there are any errors then we can't do much here right now.
                     # Let's just move ahead for now.
@@ -322,7 +332,13 @@ class Helper:
 
         return {
                 'counts': self._addCommas(this_week.shape[0]),
+                # Raw integer count. The template needs this for singular/plural wording,
+                # since 'counts' above is a formatted string.
+                'counts_int': this_week.shape[0],
                 'above_threshold_counts': high_values,
+                # The individual readings which crossed the threshold. Empty when none did.
+                'high_readings': high_readings,
+                'is_high': high_values > 0,
                 'trend': trend,
         }
 
@@ -613,6 +629,32 @@ class Helper:
 
         return value[0].upper() + value[min(1, len(value)):]
 
+    def _formatReadingDate(self, value) -> str:
+        """
+        Format a single reading's date for display in the report (eg. 'Sep 24').
+        Falls back to the raw value if we can't make sense of it, since a missing
+        date should never take down the whole report.
+        """
+        if value is None:
+            return ''
+
+        try:
+            if pd.isna(value):
+                return ''
+        except (TypeError, ValueError):
+            pass
+
+        if isinstance(value, str):
+            try:
+                value = datetime.datetime.fromisoformat(value)
+            except ValueError:
+                return value
+
+        try:
+            return value.strftime('%b %d')
+        except AttributeError:
+            return str(value)
+
     def _addCommas(self, value: int) -> str:
         """Add commas in the correct place integer passed and then return a string for it."""
         buff: str = str(value)
@@ -655,7 +697,13 @@ class Helper:
         elif calling_function_name == 'bloodPressure':
             return {
                 'counts': 6,
+                'counts_int': 6,
                 'above_threshold_counts': 2,
+                'high_readings': [
+                    {'date': 'Sep 24', 'systolic': 148, 'diastolic': 92},
+                    {'date': 'Sep 27', 'systolic': 143, 'diastolic': 88},
+                ],
+                'is_high': True,
                 'trend': trends[random.randint(0, len(trends)-1)],
             }
 

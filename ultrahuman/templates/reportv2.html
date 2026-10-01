@@ -170,6 +170,20 @@
             margin: 0;
         }
 
+        /* Blood pressure disclaimer, shown in the title only when readings run high. */
+        .summary-card-header p.bp-alert {
+            opacity: 1;
+            font-size: 1rem;
+            font-weight: 500;
+            line-height: 1.5;
+            margin: 1.25rem auto 0 auto;
+            max-width: 46rem;
+            padding: 0.875rem 1.25rem;
+            border-radius: 8px;
+            background-color: rgba(255, 255, 255, 0.15);
+            border: 1px solid rgba(255, 255, 255, 0.35);
+        }
+
         /* Special styling for the full-width symptoms card */
         .symptoms-highlight-card {
             grid-column: 1 / -1;
@@ -278,6 +292,25 @@
             font-size: 0.9rem;
             color: var(--secondary-text-color);
             margin: 0.25rem 0 0 0;
+        }
+
+        /* The individual blood pressure readings which were above the threshold. */
+        .bp-high-list {
+            list-style: none;
+            margin: 0.5rem 0 0 0;
+            padding: 0;
+        }
+
+        .bp-high-list li {
+            font-size: 0.9rem;
+            color: var(--secondary-text-color);
+            padding: 0.125rem 0;
+        }
+
+        .bp-high-date {
+            display: inline-block;
+            min-width: 4.5rem;
+            font-weight: 600;
         }
 
         .trend {
@@ -401,6 +434,9 @@
                 <div class="summary-card-header">
                     <h1>Your Weekly Report</h1>
                     <p>For the week of {{start_str}} - {{end_str}}</p>
+                    {% if bp is not none and bp.is_high %}
+                    <p class="bp-alert">Your blood pressure is higher than we'd expect. Please share this with your care provider and follow their instructions.</p>
+                    {% endif %}
                 </div>
                 <div class="summary-metrics">
                     {% if current_pregnancy_week is not none %}<div class="metric-item">
@@ -485,13 +521,20 @@
                 </div>
                 <div class="card-body">
                      <p class="primary-metric">{{ bp.counts }}<span class="unit">
-                             {% if bp.bp_counts == 1 %}
+                             {% if bp.counts_int == 1 %}
                              reading
                              {% else %}
                              readings
                              {% endif %}
                      </span></p>
                      <p class="secondary-text">{{bp.above_threshold_counts}} over 140/90</p>
+                     {% if bp.high_readings %}
+                     <ul class="bp-high-list">
+                         {% for reading in bp.high_readings %}
+                         <li><span class="bp-high-date">{{ reading.date }}</span>{{ reading.systolic }}/{{ reading.diastolic }}</li>
+                         {% endfor %}
+                     </ul>
+                     {% endif %}
                      {% if bp.trend is not none %}
                      <p class="trend">{{bp.trend}} compared to last week</p>
                      {% endif %}
