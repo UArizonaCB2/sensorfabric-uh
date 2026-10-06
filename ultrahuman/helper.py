@@ -373,6 +373,39 @@ class Helper:
             'avg_rhr': int(avg_rhr),
         }
 
+    def hrvSummary(self):
+        """
+        Get the average HRV for this week from MDH Oura sleep data.
+
+        averagehrv is Oura's per-session mean of its 5 minute rMSSD samples,
+        reported in milliseconds.
+        """
+        if os.getenv('TEMPLATE_MODE', 'PRODUCTION') == 'PRESENT':
+            return self._debugOutputs()
+
+        query = f"""
+            select
+                cast(floor(avg(averagehrv)) as int) as avg_hrv
+            from ourasleep
+            where participantidentifier = '{self.participant_id}'
+              and day between '{self.start_date}' and '{self.end_date}'
+              and averagehrv is not null
+        """
+
+        hrvsummary = self.athena_mdh.execQuery(query)
+
+        if hrvsummary is None or hrvsummary.shape[0] <= 0:
+            return None
+
+        avg_hrv = hrvsummary['avg_hrv'][0]
+
+        if pd.isna(avg_hrv):
+            return None
+
+        return {
+            'avg_hrv': int(avg_hrv),
+        }
+
     def temperatureSummary(self):
         """
         Get the summary of temperature values in the past week,
@@ -439,12 +472,50 @@ class Helper:
 
     def sleepSummary(self):
         """
-        Get the sleep summary values for this week.
+        Get the sleep summary values for this week from MDH Oura sleep data.
+
+        totalsleepduration is in seconds, per the MDH Oura Sleep export docs.
+
+        ourasleep holds one row per sleep session, so a nap is its own row. The
+        sessions are summed per day first and only then averaged across the days
+        that actually have data, otherwise a short nap would drag the per-night
+        average down.
         """
         if os.getenv('TEMPLATE_MODE', 'PRODUCTION') == 'PRESENT':
             return self._debugOutputs()
 
-        return None
+        query = f"""
+            with nightly as (
+                select day, sum(totalsleepduration) as day_seconds
+                from ourasleep
+                where participantidentifier = '{self.participant_id}'
+                  and day between '{self.start_date}' and '{self.end_date}'
+                  and totalsleepduration is not null
+                group by day
+            )
+            select
+                sum(day_seconds) as total_seconds,
+                avg(day_seconds) as avg_day_seconds
+            from nightly
+        """
+
+        sleep = self.athena_mdh.execQuery(query)
+
+        if sleep is None or sleep.shape[0] <= 0:
+            return None
+
+        total_seconds = sleep['total_seconds'][0]
+        avg_day_seconds = sleep['avg_day_seconds'][0]
+
+        if pd.isna(total_seconds) or pd.isna(avg_day_seconds):
+            return None
+
+        return {
+            # Total sleep across the whole report period, in hours.
+            'hours': int(round(float(total_seconds) / 3600)),
+            # Average sleep per night, across the nights that have data.
+            'average_per_night': round(float(avg_day_seconds) / 3600, 1),
+        }
 
     def weightSummary(self):
         """
@@ -711,6 +782,11 @@ class Helper:
             return {
                 'hr_counts': 12001600,
                 'avg_rhr': 62,
+            }
+
+        elif calling_function_name == 'hrvSummary':
+            return {
+                'avg_hrv': 48,
             }
 
         elif calling_function_name == 'temperatureSummary':

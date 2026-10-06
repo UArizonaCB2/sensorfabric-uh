@@ -247,9 +247,10 @@ class UltrahumanJWTGenerator:
             weight = helper.weightSummary()
             movement = helper.movementSummary()  # MDH/Oura
             symptoms = helper.topSymptomsRecorded()
-            sleep = None  # MDH/Oura implementation pending
+            sleep = helper.sleepSummary()  # MDH/Oura
             temp = None  # UltraHuman disabled
             hr = helper.heartRateSummary()  # MDH/Oura
+            hrv = helper.hrvSummary()  # MDH/Oura
             bp = helper.bloodPressure()
             weeks_enrolled = helper.weeksEnrolled()
             ga_weeks = helper.weeksPregnant()
@@ -273,6 +274,7 @@ class UltrahumanJWTGenerator:
                 sleep=sleep,
                 temp=temp,
                 hr=hr,
+                hrv=hrv,
                 bp=bp,
                 # enabled flags (not currently used. Passing None to metrics disables them)
                 blood_pressure_enabled=True,

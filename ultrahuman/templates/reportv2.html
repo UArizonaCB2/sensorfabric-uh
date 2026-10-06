@@ -19,6 +19,9 @@
             --primary-metric-color: #1e293b;
             --secondary-text-color: #475569;
             --symptoms-highlight-bg: #f1f5f9;
+            /* Requested report colours. */
+            --report-accent: #8C678C;
+            --report-accent-surface: #F8F8EE;
         }
 
         body.dark-theme {
@@ -31,6 +34,10 @@
             --primary-metric-color: #ffffff;
             --secondary-text-color: #9ca3af;
             --symptoms-highlight-bg: #4b5563;
+            /* The accent keeps its hue in dark mode. The ivory surface becomes a
+               translucent tint of that same accent so cards stay dark. */
+            --report-accent: #8C678C;
+            --report-accent-surface: rgba(140, 103, 140, 0.22);
         }
 
         body {
@@ -141,7 +148,6 @@
         .report-card:hover .icon-sleep svg { animation: rock 1.5s infinite ease-in-out; }
         .report-card:hover .icon-heart svg { animation: pulse 1s infinite ease-in-out; }
         .report-card:hover .icon-movement svg { animation: jiggle 0.6s infinite; }
-        .report-card:hover .icon-weight svg { animation: bounce 1.2s infinite ease-in-out; }
         .report-card:hover .icon-blood svg, .report-card:hover .icon-temp svg { transform: scale(1.1); }
 
 
@@ -180,8 +186,11 @@
             max-width: 46rem;
             padding: 0.875rem 1.25rem;
             border-radius: 8px;
-            background-color: rgba(255, 255, 255, 0.15);
-            border: 1px solid rgba(255, 255, 255, 0.35);
+            /* Requested accent. White body text on #8C678C measures 4.74:1,
+               which clears WCAG AA for normal text -- this is a care instruction,
+               so legibility wins over using the accent as the text colour. */
+            background-color: var(--report-accent);
+            border: 1px solid rgba(248, 248, 238, 0.45);
         }
 
         /* Special styling for the full-width symptoms card */
@@ -259,8 +268,12 @@
         .icon.heart { background-color: #ffedd5; color: #9a3412; }
         .icon.temp { background-color: #dbeafe; color: #1e40af; }
         .icon.sleep { background-color: #f3e8ff; color: #581c87; }
-        .icon.weight { background-color: #d1fae5; color: #065f46; }
         .icon.movement { background-color: #cffafe; color: #0e7490; }
+
+        /* Requested report colours on the new HRV card. This uses the .icon-hrv
+           class the markup actually emits -- unlike the .icon.<name> rules above,
+           whose selectors never match "icon icon-<name>" and so never render. */
+        .icon-hrv { background-color: var(--report-accent-surface); color: var(--report-accent); }
 
         .card-header h2 {
             font-size: 1.1rem;
@@ -298,7 +311,10 @@
         .bp-high-list {
             list-style: none;
             margin: 0.5rem 0 0 0;
-            padding: 0;
+            padding: 0.5rem 0.75rem;
+            background-color: var(--report-accent-surface);
+            border-left: 3px solid var(--report-accent);
+            border-radius: 6px;
         }
 
         .bp-high-list li {
@@ -464,8 +480,8 @@
                     <h2>Avg. Sleep</h2>
                 </div>
                 <div class="card-body">
-                    <p class="primary-metric">{{sleep.hours}}<span class="unit">hrs</span></p>
-                    <p class="secondary-text">{{sleep.average_per_night}} hours this week</p>
+                    <p class="primary-metric">{{sleep.average_per_night}}<span class="unit">hrs/night</span></p>
+                    <p class="secondary-text">{{sleep.hours}} hours this week</p>
                 </div>
             </div>
             {% endif %}
@@ -486,6 +502,22 @@
                     {% endif %}
                 </div>
             </div>
+
+            <!-- HRV Card -->
+            {% if hrv is defined and hrv is not none %}
+            <div class="report-card">
+                <div class="card-header">
+                    <div class="icon icon-hrv">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M3 12h3.75l2.25-6 3 12 2.25-6H21" /></svg>
+                    </div>
+                    <h2>Average HRV</h2>
+                </div>
+                <div class="card-body">
+                    <p class="primary-metric">{{hrv.avg_hrv}}<span class="unit">ms</span></p>
+                    <p class="secondary-text">This week</p>
+                </div>
+            </div>
+            {% endif %}
 
             <!-- Movement Card -->
             <div class="report-card">
@@ -561,21 +593,6 @@
             </div>
             {% endif %}
 
-            <!-- Weight Card -->
-            {% if weight is not none %}
-            <div class="report-card">
-                <div class="card-header">
-                    <div class="icon icon-weight">
-                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" /></svg>
-                    </div>
-                    <h2>Weight Change</h2>
-                </div>
-                <div class="card-body">
-                    <p class="primary-metric">{{weight.change_in_weight}}<span class="unit">lbs</span></p>
-                    <p class="secondary-text">This week</p>
-                </div>
-            </div>
-            {% endif %}
 
             <!-- Symptoms Card - Full Width -->
             {% if symptoms is not none %}
