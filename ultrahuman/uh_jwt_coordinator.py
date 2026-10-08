@@ -201,8 +201,11 @@ def lambda_handler(event, context):
     {
         "participant_id": "optional_specific_participant_id",
         "start_date": "2024-01-01",  # Optional, auto-generated if not provided
-        "end_date": "2024-01-08"     # Optional, auto-generated if not provided
+        "end_date": "2024-01-07"     # Optional, auto-generated if not provided
     }
+
+    Both dates are inclusive. When either is missing, both are auto-generated
+    as the last 7 completed days (start = today - 7, end = yesterday).
     
     Environment variables required:
     - AWS_SECRET_NAME: Name of the secret in AWS Secrets Manager
@@ -222,9 +225,13 @@ def lambda_handler(event, context):
         end_date = event.get('end_date', None)
         start_date = event.get('start_date', None)
         if not end_date or not start_date:
-            # Auto-generate dates if not provided: end_date = today, start_date = today - 7 days
+            # Auto-generate dates if not provided: the report covers the last 7
+            # COMPLETED calendar days, so end_date is yesterday and start_date is
+            # today - 7. The schedule fires at 00:00 America/Phoenix, so "today"
+            # has barely begun and carries no sleep session yet; including it gave
+            # an 8-day window whose end_date was also the next run's start_date.
             today = datetime.date.today()
-            end_date = today.strftime('%Y-%m-%d')
+            end_date = (today - datetime.timedelta(days=1)).strftime('%Y-%m-%d')
             start_date = (today - datetime.timedelta(days=7)).strftime('%Y-%m-%d')
 
         logger.info(f"Using dates: start_date={start_date}, end_date={end_date}")
