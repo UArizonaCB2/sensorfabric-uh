@@ -729,6 +729,13 @@ class Helper:
     def _addCommas(self, value: int) -> str:
         """Add commas in the correct place integer passed and then return a string for it."""
         buff: str = str(value)
+        # Hold the sign aside. Grouping the digits with the '-' still attached
+        # puts a comma straight after it whenever the digit count is a multiple
+        # of three, which produced strings like '-,512'.
+        sign = ''
+        if buff.startswith('-'):
+            sign = '-'
+            buff = buff[1:]
         buff = buff[::-1]
         cbuff = ""
         for i in range(0, len(buff)):
@@ -737,7 +744,7 @@ class Helper:
                 cbuff = cbuff + ','
         cbuff = cbuff[::-1]
 
-        return cbuff
+        return sign + cbuff
 
     def _debugOutputs(self):
         """

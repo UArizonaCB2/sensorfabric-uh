@@ -239,11 +239,11 @@ class UltrahumanJWTWorker:
                 helper = Helper(config=config)
                 ringwear = None  # UltraHuman disabled; use MDH/Oura later
                 weight = helper.weightSummary()
-                movement = None  # UltraHuman disabled
+                movement = helper.movementSummary()  # MDH/Oura
                 symptoms = helper.topSymptomsRecorded()
                 sleep = helper.sleepSummary()  # MDH/Oura
                 temp = None  # UltraHuman disabled
-                hr = None  # MDH/Oura implementation pending
+                hr = helper.heartRateSummary()  # MDH/Oura
                 hrv = helper.hrvSummary()  # MDH/Oura
                 bp = helper.bloodPressure()
                 weeks_enrolled = helper.weeksEnrolled()

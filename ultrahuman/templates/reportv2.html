@@ -533,7 +533,13 @@
                     {% else %}
                         <p class="primary-metric">{{movement.average_steps_int}}</p>
                         {% if movement.trend is not none %}
-                        <p class="trend negative">{{movement.trend}} steps than last week</p>
+                        {% if movement.trend == '0' %}
+                        <p class="trend neutral">No change in steps from last week</p>
+                        {% elif movement.trend.startswith('-') %}
+                        <p class="trend negative">{{movement.trend[1:]}} fewer steps than last week</p>
+                        {% else %}
+                        <p class="trend">{{movement.trend}} more steps than last week</p>
+                        {% endif %}
                         {% endif %}
                     {% endif %}
                 </div>
