@@ -298,20 +298,22 @@ class Helper:
         # Check for values which are above the threshold.
         if this_week.shape[0] > 0:
             for when, sys, dia in zip(this_week['reading_date'], this_week['systolic'], this_week['diastolic']):
-                try:
-                    if sys > 140 or dia > 90:
-                        # Build the entry first so the count and the list can never disagree.
-                        reading = {
-                            'date': self._formatReadingDate(when),
-                            'systolic': int(sys),
-                            'diastolic': int(dia),
-                        }
-                        high_values += 1
-                        high_readings.append(reading)
-                except:
-                    # If there are any errors then we can't do much here right now.
-                    # Let's just move ahead for now.
-                    continue
+                # Evaluate each side independently and NULL-safely. A reading
+                # that is high on one value while the other is missing is still
+                # a high reading and must not be dropped. int() is only applied
+                # to a value that is actually present.
+                sys_high = pd.notna(sys) and sys > 140
+                dia_high = pd.notna(dia) and dia > 90
+
+                if sys_high or dia_high:
+                    # Build the entry first so the count and the list can never disagree.
+                    reading = {
+                        'date': self._formatReadingDate(when),
+                        'systolic': int(sys) if pd.notna(sys) else None,
+                        'diastolic': int(dia) if pd.notna(dia) else None,
+                    }
+                    high_values += 1
+                    high_readings.append(reading)
 
         # Not always gaurenteed that we will have data for this week and the past.
         trend = None
@@ -621,17 +623,18 @@ class Helper:
         avg_steps = None
         steps_changed = None
 
-        try:
-            avg_curr = movement['avg_curr'][0]
-            avg_prev = movement['avg_prev'][0]
+        # No try/except here on purpose. NULL aggregates are handled by the
+        # pd.isna checks below and correctly yield None, meaning "no records".
+        # Anything else (a missing column, a type the cast did not produce) is a
+        # real failure and must surface rather than be reported as "No Data".
+        avg_curr = movement['avg_curr'][0]
+        avg_prev = movement['avg_prev'][0]
 
-            if not pd.isna(avg_curr):
-                avg_steps = int(avg_curr)
+        if not pd.isna(avg_curr):
+            avg_steps = int(avg_curr)
 
-            if not pd.isna(avg_curr) and not pd.isna(avg_prev):
-                steps_changed = int(avg_curr) - int(avg_prev)
-        except:
-            return None
+        if not pd.isna(avg_curr) and not pd.isna(avg_prev):
+            steps_changed = int(avg_curr) - int(avg_prev)
 
         if avg_steps is None:
             return None

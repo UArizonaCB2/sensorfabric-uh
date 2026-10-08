@@ -569,7 +569,7 @@
                      {% if bp.high_readings %}
                      <ul class="bp-high-list">
                          {% for reading in bp.high_readings %}
-                         <li><span class="bp-high-date">{{ reading.date }}</span>{{ reading.systolic }}/{{ reading.diastolic }}</li>
+                         <li><span class="bp-high-date">{{ reading.date }}</span>{% if reading.systolic is none %}&mdash;{% else %}{{ reading.systolic }}{% endif %}/{% if reading.diastolic is none %}&mdash;{% else %}{{ reading.diastolic }}{% endif %}</li>
                          {% endfor %}
                      </ul>
                      {% endif %}
