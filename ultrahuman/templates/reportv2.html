@@ -574,7 +574,19 @@
                      </ul>
                      {% endif %}
                      {% if bp.trend is not none %}
-                     <p class="trend">{{bp.trend}} compared to last week</p>
+                     {# Name the measure explicitly. The two figures above this line are
+                        counts, so a bare "Higher compared to last week" could be read as
+                        "more readings". The trend comes from mean arterial pressure.
+                        Colour follows the clinical direction rather than the default
+                        green: rising blood pressure is the adverse direction, so it
+                        takes the red style and a fall takes the green one. #}
+                     {% if bp.trend == 'Higher' %}
+                     <p class="trend negative">Average blood pressure higher than last week</p>
+                     {% elif bp.trend == 'Lower' %}
+                     <p class="trend">Average blood pressure lower than last week</p>
+                     {% else %}
+                     <p class="trend neutral">Average blood pressure steady compared to last week</p>
+                     {% endif %}
                      {% endif %}
                 </div>
             </div>

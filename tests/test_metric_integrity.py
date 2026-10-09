@@ -7,6 +7,7 @@ post-query logic under test runs exactly as it does in production. No
 participant data is used.
 """
 import datetime as dt
+import re
 import sys
 import unittest
 
@@ -138,6 +139,96 @@ class HighBloodPressureIsNeverDropped(unittest.TestCase):
     def test_threshold_boundary_is_strictly_greater(self):
         r = helper(_Returns(bp_frame([(dt.date(2026, 10, 1), 140.0, 90.0)]))).bloodPressure()
         self.assertEqual(r['above_threshold_counts'], 0)
+
+
+class BloodPressureTrendWording(unittest.TestCase):
+    """The trend line comes from mean arterial pressure, so it must say so.
+
+    The two figures above it on the card are counts ("N readings",
+    "M over 140/90"), so a bare "Higher compared to last week" invited the
+    reading "more readings than last week".
+    """
+
+    def _trend_tag(self, seg):
+        """Return the class on the trend <p>, or None when no trend line exists."""
+        m = re.search(r'<p class="(trend[^"]*)">', seg)
+        return m.group(1) if m else None
+
+    def _render(self, trend):
+        from jinja2 import Environment, FileSystemLoader
+        env = Environment(loader=FileSystemLoader(
+            '/home/duo/sensorfabric-uh/ultrahuman/templates'))
+        tpl = env.get_template('reportv2.html')
+        html = tpl.render(
+            ringwear=None, temp=None, weight=None, weeks_enrolled=24,
+            current_pregnancy_week=24, surveys_completed=3, symptoms=None,
+            sleep=None, hrv=None, hr=None, movement=None,
+            bp={'counts': '2', 'counts_int': 2, 'above_threshold_counts': 0,
+                'high_readings': [], 'is_high': False, 'trend': trend},
+            blood_pressure_enabled=True, heart_rate_enabled=True,
+            temperature_enabled=True, sleep_enabled=True, weight_enabled=True,
+            movement_enabled=True, start_str='October 01',
+            end_str='October 07, 2026')
+        i = html.find('<h2>Blood Pressure</h2>')
+        seg = html[i:]
+        seg = seg[:seg.find('</div>', seg.find('card-body'))]
+        return ' '.join(re.sub(r'<[^>]+>', ' ', seg).split()), seg
+
+    def test_higher_wording_and_red_style(self):
+        txt, seg = self._render('Higher')
+        self.assertIn('Average blood pressure higher than last week', txt)
+        self.assertNotIn('Higher compared to last week', txt)
+        # Rising blood pressure is the adverse direction, so it must not use
+        # the default green style.
+        self.assertEqual(self._trend_tag(seg), 'trend negative')
+
+    def test_lower_wording_and_green_style(self):
+        txt, seg = self._render('Lower')
+        self.assertIn('Average blood pressure lower than last week', txt)
+        self.assertEqual(self._trend_tag(seg), 'trend')
+
+    def test_steady_wording_and_neutral_style(self):
+        txt, seg = self._render('Steady')
+        self.assertIn('Average blood pressure steady compared to last week', txt)
+        self.assertNotIn('steady than last week', txt)
+        self.assertEqual(self._trend_tag(seg), 'trend neutral')
+
+    def test_no_trend_line_when_trend_is_none(self):
+        txt, seg = self._render(None)
+        self.assertNotIn('Average blood pressure', txt)
+        self.assertIsNone(self._trend_tag(seg))
+
+    def test_each_state_maps_to_its_own_distinct_style(self):
+        seen = {}
+        for trend, want in (('Higher', 'trend negative'),
+                            ('Lower', 'trend'),
+                            ('Steady', 'trend neutral')):
+            _, seg = self._render(trend)
+            got = self._trend_tag(seg)
+            self.assertEqual(got, want, '%s used %r' % (trend, got))
+            seen[trend] = got
+        self.assertEqual(len(set(seen.values())), 3, 'styles must be distinct')
+
+    def test_styles_used_are_defined_in_the_stylesheet(self):
+        _, seg = self._render('Higher')
+        from jinja2 import Environment, FileSystemLoader
+        env = Environment(loader=FileSystemLoader(
+            '/home/duo/sensorfabric-uh/ultrahuman/templates'))
+        css = env.loader.get_source(env, 'reportv2.html')[0]
+        for rule in ('.trend {', '.trend.negative {', '.trend.neutral {'):
+            self.assertIn(rule, css, 'missing CSS rule %s' % rule)
+
+    def test_wording_never_implies_reading_counts(self):
+        for trend in ('Higher', 'Lower', 'Steady'):
+            txt, _ = self._render(trend)
+            self.assertIn('Average blood pressure', txt,
+                          '%s must name the measure' % trend)
+            self.assertNotIn('%s compared to last week' % trend, txt)
+
+    def test_counts_and_threshold_line_unchanged(self):
+        txt, _ = self._render('Higher')
+        self.assertIn('2 readings', txt)
+        self.assertIn('0 over 140/90', txt)
 
 
 class QueriesTargetTheRightSourceAndWindow(unittest.TestCase):
