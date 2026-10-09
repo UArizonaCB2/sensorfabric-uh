@@ -347,17 +347,28 @@ class Helper:
     def heartRateSummary(self):
         """
         Get resting heart rate from MDH Oura sleep data.
+
+        ourasleep holds one row per sleep session, so a nap is its own row.
+        The sessions are averaged within each calendar day first and only then
+        averaged across the days that have data, so every day carries equal
+        weight no matter how many sessions it contains. Days with no valid
+        reading drop out of the average rather than counting as zero.
         """
         if os.getenv('TEMPLATE_MODE', 'PRODUCTION') == 'PRESENT':
             return self._debugOutputs()
 
         query = f"""
+            with daily as (
+                select day, avg(lowestheartrate) as day_rhr
+                from ourasleep
+                where participantidentifier = '{self.participant_id}'
+                  and day between '{self.start_date}' and '{self.end_date}'
+                  and lowestheartrate is not null
+                group by day
+            )
             select
-                cast(floor(avg(lowestheartrate)) as int) as avg_rhr
-            from ourasleep
-            where participantidentifier = '{self.participant_id}'
-              and day between '{self.start_date}' and '{self.end_date}'
-              and lowestheartrate is not null
+                cast(floor(avg(day_rhr)) as int) as avg_rhr
+            from daily
         """
 
         hrsummary = self.athena_mdh.execQuery(query)
@@ -381,17 +392,28 @@ class Helper:
 
         averagehrv is Oura's per-session mean of its 5 minute rMSSD samples,
         reported in milliseconds.
+
+        ourasleep holds one row per sleep session, so a nap is its own row.
+        The sessions are averaged within each calendar day first and only then
+        averaged across the days that have data, so every day carries equal
+        weight no matter how many sessions it contains. Days with no valid
+        reading drop out of the average rather than counting as zero.
         """
         if os.getenv('TEMPLATE_MODE', 'PRODUCTION') == 'PRESENT':
             return self._debugOutputs()
 
         query = f"""
+            with daily as (
+                select day, avg(averagehrv) as day_hrv
+                from ourasleep
+                where participantidentifier = '{self.participant_id}'
+                  and day between '{self.start_date}' and '{self.end_date}'
+                  and averagehrv is not null
+                group by day
+            )
             select
-                cast(floor(avg(averagehrv)) as int) as avg_hrv
-            from ourasleep
-            where participantidentifier = '{self.participant_id}'
-              and day between '{self.start_date}' and '{self.end_date}'
-              and averagehrv is not null
+                cast(floor(avg(day_hrv)) as int) as avg_hrv
+            from daily
         """
 
         hrvsummary = self.athena_mdh.execQuery(query)
