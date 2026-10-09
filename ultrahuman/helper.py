@@ -690,8 +690,12 @@ class Helper:
         for name, count, days in zip(topsymptoms['symptom'], topsymptoms['total_count'], topsymptoms['days']):
             tsymptoms.append({
                 'name': self._capFirst(name.replace('_', ' ')),
-                'count': count,
-                'days': days,
+                # Athena hands these back as strings. The template compares
+                # days against the integer 1 to pick "day" vs "days", and the
+                # count-up script parses data-value as a number, so cast here
+                # rather than leaving every symptom reading "1 days".
+                'count': int(count),
+                'days': int(days),
             })
 
         return tsymptoms

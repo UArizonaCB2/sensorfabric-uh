@@ -209,6 +209,45 @@ class UnitsAndCalculations(unittest.TestCase):
             {'symptom': ['back_pain'], 'total_count': [4], 'days': [3]}))).topSymptomsRecorded()
         self.assertEqual(r, [{'name': 'Back pain', 'count': 4, 'days': 3}])
 
+    def test_symptom_counts_are_ints_even_when_athena_returns_strings(self):
+        # Athena returns count(*) and cardinality() as strings. The template
+        # compares days against the integer 1 to choose "day" vs "days", so a
+        # string made every symptom render "1 days".
+        r = helper(_Returns(pd.DataFrame(
+            {'symptom': ['sore_nipples'], 'total_count': ['1'], 'days': ['1']}
+        ))).topSymptomsRecorded()
+        self.assertEqual(r[0]['count'], 1)
+        self.assertEqual(r[0]['days'], 1)
+        self.assertIsInstance(r[0]['count'], int)
+        self.assertIsInstance(r[0]['days'], int)
+        self.assertTrue(r[0]['days'] == 1, 'singular branch must be reachable')
+
+    def test_symptom_singular_and_plural_render_correctly(self):
+        from jinja2 import Environment, FileSystemLoader
+        env = Environment(loader=FileSystemLoader(
+            '/home/duo/sensorfabric-uh/ultrahuman/templates'))
+        tpl = env.get_template('reportv2.html')
+        rows = helper(_Returns(pd.DataFrame(
+            {'symptom': ['sore_nipples', 'fatigue'],
+             'total_count': ['1', '5'], 'days': ['1', '5']}
+        ))).topSymptomsRecorded()
+        html = tpl.render(
+            ringwear=None, temp=None, weight=None, weeks_enrolled=24,
+            current_pregnancy_week=24, surveys_completed=3, symptoms=rows,
+            sleep=None, hrv=None, hr=None, movement=None, bp=None,
+            blood_pressure_enabled=True, heart_rate_enabled=True,
+            temperature_enabled=True, sleep_enabled=True, weight_enabled=True,
+            movement_enabled=True, start_str='October 01',
+            end_str='October 07, 2026')
+        import re
+        i = html.find('Top Symptoms')
+        items = [' '.join(re.sub(r'<[^>]+>', ' ', m.group(1)).split())
+                 for m in re.finditer(r'<div class="metric-item">(.*?)</div>',
+                                      html[i:i + 2600], re.S)]
+        self.assertIn('1 day Sore nipples', items)
+        self.assertIn('5 days Fatigue', items)
+        self.assertNotIn('1 days Sore nipples', items)
+
 
 class NoMockDataInProductionMode(unittest.TestCase):
     def test_debug_outputs_requires_template_mode_present(self):
