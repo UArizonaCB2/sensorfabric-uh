@@ -5,7 +5,8 @@
     <%= DemographicField.FirstName %>   participant first name
     <%= CustomField.report_jwt %>       full report URL, written by uh_jwt_worker
 
-  !! VERIFY the report_jwt token name against MDH's variable picker before sending. !!
+  Both tokens verified end to end against MDH (Oct 2026), including
+  <%= CustomField.report_jwt %> inside an href attribute.
 
   Built as a table-based fragment with every style inline, so it survives both a
   rich-text editor and a raw send. Do not "tidy" it into divs: Outlook renders through
