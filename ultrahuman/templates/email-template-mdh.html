@@ -1,0 +1,81 @@
+<!--
+  BioBayb weekly report email, sent from MyDataHelps.
+
+  Platform variables (populated by MDH before sending):
+    <%= DemographicField.FirstName %>   participant first name
+    <%= CustomField.report_jwt %>       full report URL, written by uh_jwt_worker
+
+  !! VERIFY the report_jwt token name against MDH's variable picker before sending. !!
+
+  Built as a table-based fragment with every style inline, so it survives both a
+  rich-text editor and a raw send. Do not "tidy" it into divs: Outlook renders through
+  Word and drops most modern layout CSS.
+
+  Token escaping: the variables are written HTML-escaped (&lt;%= ... %&gt;) because that
+  is the form MDH's builder exports and the form its substitution engine matches. Writing
+  them literally as <%= ... %> does NOT substitute. Keep them escaped, including inside
+  href attributes.
+-->
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;background-color:#f0f4f8;margin:0;padding:0;">
+  <tr>
+    <td align="center" style="padding:24px 12px;">
+
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="600" style="border-collapse:collapse;width:100%;max-width:600px;background-color:#ffffff;border:1px solid #e2e8f0;border-radius:12px;">
+
+        <!-- accent bar -->
+        <tr>
+          <td style="background-color:#8C678C;height:6px;line-height:6px;font-size:0;border-radius:12px 12px 0 0;">&nbsp;</td>
+        </tr>
+
+        <tr>
+          <td style="padding:36px 40px 8px 40px;font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+            <h1 style="margin:0;font-size:26px;line-height:34px;font-weight:700;color:#374151;">Your Weekly Report</h1>
+          </td>
+        </tr>
+
+        <tr>
+          <td style="padding:20px 40px 0 40px;font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:16px;line-height:26px;color:#475569;">
+            <p style="margin:0 0 16px 0;">Hello &lt;%= DemographicField.FirstName %&gt;,</p>
+            <p style="margin:0;">Your weekly report is ready. Click the button below to open it.</p>
+          </td>
+        </tr>
+
+        <!-- button: bgcolor + padding on the td so Outlook keeps the fill -->
+        <tr>
+          <td align="center" style="padding:32px 40px;">
+            <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
+              <tr>
+                <td bgcolor="#8C678C" style="border-radius:8px;padding:15px 34px;">
+                  <a href="&lt;%= CustomField.report_jwt %&gt;" style="font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:16px;line-height:20px;font-weight:600;color:#ffffff;text-decoration:none;display:inline-block;">View my report</a>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+
+        <!-- privacy callout -->
+        <tr>
+          <td style="padding:0 40px;">
+            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;background-color:#F8F8EE;border-radius:8px;">
+              <tr>
+                <td style="padding:18px 22px;font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:22px;color:#475569;">
+                  <strong style="color:#374151;">This link is unique to you.</strong> Anyone you share this link or email with will be able to view your weekly report. The link stays active for the current week.
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+
+        <!-- plain-URL fallback for clients that strip the button -->
+        <tr>
+          <td style="padding:24px 40px 36px 40px;font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:12px;line-height:20px;color:#9ca3af;">
+            If the button does not work, copy and paste this address into your browser:<br>
+            <a href="&lt;%= CustomField.report_jwt %&gt;" style="font-size:10px;line-height:15px;color:#8C678C;text-decoration:underline;word-break:break-all;">&lt;%= CustomField.report_jwt %&gt;</a>
+          </td>
+        </tr>
+
+      </table>
+
+    </td>
+  </tr>
+</table>
