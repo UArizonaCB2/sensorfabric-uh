@@ -286,6 +286,17 @@ Account `509812589231`, region `us-east-1` for both.
   `deploy-dashboard.sh` only updates the three report functions, `publisher`/`uploader` keep
   running an older digest and will pick up accumulated changes whenever someone next runs
   `deploy.sh`. That is intentional while the UH half is being retired.
+- **`deploy-dashboard.sh` ships code only; env vars need `cdk deploy`.** It calls
+  `update-function-code` / `publish-version` / `update-alias` and nothing else, so anything
+  CloudFormation owns — environment variables, memory, timeouts, the EventBridge schedule,
+  Step Functions, IAM, the Function URL — is unchanged by it. The trap: when CDK gains a new
+  env var that the code then requires, shipping that code with the script alone leaves the
+  function without the variable. `MDH_ACTIVE_SEGMENT_ID` is the live example — the coordinator
+  fails closed without it and every scheduled run sends zero reports. Run
+  `cdk deploy -c config=<X>` first. The script now pre-flights this specific variable before
+  updating the coordinator; add any future equivalents to `COORDINATOR_REQUIRED_ENV`.
+  Note the coordinator also reads the value off the Secrets Manager payload, which is a way to
+  set it without a CDK deploy.
 - **All `Helper` SQL is f-string interpolated** with `participant_id` and dates. Preserve the
   existing shape when editing rather than introducing a new interpolation style.
 - Container base image is `public.ecr.aws/lambda/python:3.13`; `requirements.txt` is pinned and is

@@ -31,6 +31,12 @@ ALIAS_NAME="LIVE"
 ALL_FUNCS="biobayb_uh_jwt_worker biobayb_uh_template_generator biobayb_uh_jwt_coordinator"
 WORKER_FUNC="biobayb_uh_jwt_worker"
 GENERATOR_FUNC="biobayb_uh_template_generator"
+COORDINATOR_FUNC="biobayb_uh_jwt_coordinator"
+
+# Env vars the deployed function must already carry for the new code to work.
+# This script only ships code; env vars are CloudFormation-owned and arrive via
+# `cdk deploy`. Anything listed here is checked before the function is updated.
+COORDINATOR_REQUIRED_ENV="MDH_ACTIVE_SEGMENT_ID"
 
 # Options
 # PROJECT holds the CDK `project_name`, NOT `stack_name`. Lambda functions are named
@@ -306,6 +312,55 @@ verify_functions_exist() {
         log_error "  cd cdk && cdk deploy -c config=<prod|sandbox>"
         exit 1
     fi
+}
+
+check_coordinator_env() {
+    # The coordinator reads MDH_ACTIVE_SEGMENT_ID to pick the weekly report audience
+    # and fails closed without it, so a code-only deploy can silently stop every
+    # Sunday run. This script cannot set the variable: `cdk deploy` owns it.
+    case " $TARGET_FUNCS " in
+        *" $COORDINATOR_FUNC "*) ;;
+        *) return 0 ;;
+    esac
+
+    local fn value
+    fn="$(func_name "$COORDINATOR_FUNC")"
+
+    for key in $COORDINATOR_REQUIRED_ENV; do
+        value=$(aws lambda get-function-configuration \
+            --function-name "$fn" --region "$AWS_REGION" \
+            --query "Environment.Variables.$key" --output text 2>/dev/null)
+
+        if [ -n "$value" ] && [ "$value" != "None" ]; then
+            log_info "$key is set on the coordinator"
+            continue
+        fi
+
+        echo
+        log_warning "$key is NOT set on $fn."
+        log_warning "The coordinator selects the weekly report audience from that MDH"
+        log_warning "segment and fails closed without it: every scheduled run raises and"
+        log_warning "NO reports go out. This script only ships code, so it cannot set it."
+        log_warning "Fix with:  cd cdk && cdk deploy -c config=<prod|sandbox>"
+        log_warning "or add $key to the Secrets Manager payload, which the"
+        log_warning "coordinator also reads."
+
+        case "$PROJECT" in
+            *prod*)
+                if [ "$ASSUME_YES" != true ]; then
+                    printf "Continue updating the coordinator anyway? [y/N] "
+                    read -r reply
+                    case "$reply" in
+                        [yY]|[yY][eE][sS]) ;;
+                        *) log_info "Aborted."; exit 0 ;;
+                    esac
+                fi
+                ;;
+            *)
+                log_warning "(expected on sandbox, which ships no segment id)"
+                ;;
+        esac
+    done
 }
 
 confirm_production() {
@@ -632,6 +687,7 @@ case "$ACTION" in
         ;;
     deploy-only)
         verify_functions_exist
+        check_coordinator_env
         confirm_production
         update_functions
         health_check
@@ -641,6 +697,7 @@ case "$ACTION" in
         ;;
     deploy)
         verify_functions_exist
+        check_coordinator_env
         confirm_production
         build_and_push_image
         update_functions
