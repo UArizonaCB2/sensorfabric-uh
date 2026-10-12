@@ -37,7 +37,9 @@ prodConfig = StackConfig(
     sf_data_bucket="uoa-biobayb-uh-prod2",
     uh_environment="production",
     template_mode="PRODUCTION",
-    jwt_expiration_days="14"
+    jwt_expiration_days="14",
+    # MDH segment "Active participants" in BioBAYB2-Prod.
+    mdh_active_segment_id="5be2dbab-8328-47ab-a6f0-6ad71dc266b0"
 )
 
 # Sandbox stack for trusted developers (IAM user in the "uhsandbox" allow-list).

@@ -38,6 +38,10 @@ class StackConfig:
     template_mode: str        # PRODUCTION or PRESENT
     jwt_expiration_days: str
     athena_workgroup: str = ""  # if set, CDK creates a dedicated Athena workgroup by this name
+    # GUID of the MDH participant segment the weekly report is sent to. Left
+    # empty for stacks that have no such segment; the coordinator then fails
+    # closed rather than falling back to a wider audience.
+    mdh_active_segment_id: str = ""
 
 
 class SensorFabricLambdaStack(Stack):
@@ -140,7 +144,11 @@ class SensorFabricLambdaStack(Stack):
                 "memory_size": 1024,
                 "environment": {
                     "AWS_SECRET_NAME": self.config.aws_secret_name,
-                    "JWT_BATCH_SIZE": "10"
+                    "JWT_BATCH_SIZE": "10",
+                    # Weekly report audience. The coordinator queries this MDH
+                    # segment on every run, so segment rule changes in MDH take
+                    # effect without a deploy.
+                    "MDH_ACTIVE_SEGMENT_ID": self.config.mdh_active_segment_id
                 }
             },
             "biobayb_uh_jwt_worker": {
